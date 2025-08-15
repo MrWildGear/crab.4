@@ -34,6 +34,7 @@ class EVELogReader:
         self.bounty_entries = []  # Store bounty entries with timestamps
         self.total_bounty_isk = 0  # Total ISK earned from bounties
         self.bounty_session_start = None  # When bounty tracking started
+        self.duplicate_bounties_skipped = 0  # Track duplicates to avoid double-counting
         
         # Settings for recent file filtering
         self.max_days_old = 1  # Only show logs from last 24 hours by default
@@ -240,6 +241,11 @@ class EVELogReader:
         bounty_session_label = ttk.Label(bounty_frame, textvariable=self.bounty_session_var)
         bounty_session_label.grid(row=0, column=2, sticky=tk.W, padx=(0, 20))
         
+        # Duplicate count label
+        self.duplicate_count_var = tk.StringVar(value="Duplicates: 0")
+        duplicate_count_label = ttk.Label(bounty_frame, textvariable=self.duplicate_count_var)
+        duplicate_count_label.grid(row=0, column=3, sticky=tk.W, padx=(0, 20))
+        
         # Bounty control buttons
         reset_bounty_btn = tk.Button(bounty_frame, text="Reset Bounty Tracking", command=self.reset_bounty_tracking,
                                     bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
@@ -247,7 +253,7 @@ class EVELogReader:
                                     activeforeground="#ffffff",  # White text when clicked
                                     relief="raised", borderwidth=1,
                                     font=("Segoe UI", 9))
-        reset_bounty_btn.grid(row=0, column=3, padx=(20, 0))
+        reset_bounty_btn.grid(row=0, column=4, padx=(20, 0))
         
         show_bounties_btn = tk.Button(bounty_frame, text="Show Bounty Details", command=self.show_bounty_details,
                                      bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
@@ -255,7 +261,7 @@ class EVELogReader:
                                      activeforeground="#ffffff",  # White text when clicked
                                      relief="raised", borderwidth=1,
                                      font=("Segoe UI", 9))
-        show_bounties_btn.grid(row=0, column=4, padx=(20, 0))
+        show_bounties_btn.grid(row=0, column=5, padx=(20, 0))
         
         # Manual bounty scan button
         scan_bounties_btn = tk.Button(bounty_frame, text="Scan for Bounties", command=self.scan_existing_bounties,
@@ -264,7 +270,7 @@ class EVELogReader:
                                      activeforeground="#ffffff",  # White text when clicked
                                      relief="raised", borderwidth=1,
                                      font=("Segoe UI", 9))
-        scan_bounties_btn.grid(row=0, column=5, padx=(20, 0))
+        scan_bounties_btn.grid(row=0, column=6, padx=(20, 0))
         
         # Test bounty button
         test_bounty_btn = tk.Button(bounty_frame, text="Add Test Bounty", command=self.add_test_bounty,
@@ -273,7 +279,7 @@ class EVELogReader:
                                    activeforeground="#ffffff",  # White text when clicked
                                    relief="raised", borderwidth=1,
                                    font=("Segoe UI", 9))
-        test_bounty_btn.grid(row=0, column=6, padx=(20, 0))
+        test_bounty_btn.grid(row=0, column=7, padx=(20, 0))
         
         # Test bounty detection button
         test_detection_btn = tk.Button(bounty_frame, text="Test Detection", command=self.test_bounty_detection,
@@ -282,7 +288,7 @@ class EVELogReader:
                                       activeforeground="#ffffff",  # White text when clicked
                                       relief="raised", borderwidth=1,
                                       font=("Segoe UI", 9))
-        test_detection_btn.grid(row=0, column=7, padx=(20, 0))
+        test_detection_btn.grid(row=0, column=8, padx=(20, 0))
         
         status_frame = ttk.Frame(main_frame)
         status_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
@@ -558,8 +564,20 @@ class EVELogReader:
                             # Check for bounty entries
                             bounty_amount = self.extract_bounty(line)
                             if bounty_amount and timestamp:
-                                print(f"💰 Processing bounty: {bounty_amount:,} ISK from {source_file}")
-                                self.add_bounty_entry(timestamp, bounty_amount, source_file)
+                                # Check if this bounty is already tracked to avoid duplicates
+                                bounty_exists = any(
+                                    entry['timestamp'] == timestamp and 
+                                    entry['isk_amount'] == bounty_amount and 
+                                    entry['source_file'] == source_file
+                                    for entry in self.bounty_entries
+                                )
+                                
+                                if not bounty_exists:
+                                    print(f"💰 Processing bounty: {bounty_amount:,} ISK from {source_file}")
+                                    self.add_bounty_entry(timestamp, bounty_amount, source_file)
+                                else:
+                                    self.duplicate_bounties_skipped += 1
+                                    print(f"🔄 Skipping duplicate bounty: {bounty_amount:,} ISK from {source_file} (Total duplicates skipped: {self.duplicate_bounties_skipped})")
                             
                             self.all_log_entries.append((timestamp, line, source_file))
                         
@@ -806,6 +824,7 @@ class EVELogReader:
         self.bounty_entries = []
         self.total_bounty_isk = 0
         self.bounty_session_start = datetime.now()
+        self.duplicate_bounties_skipped = 0  # Reset duplicate counter
         self.update_bounty_display()
         print("🔄 Bounty tracking reset")
     
@@ -1249,6 +1268,9 @@ class EVELogReader:
                 self.bounty_session_var.set(f"Session: {hours}h {minutes}m")
             else:
                 self.bounty_session_var.set("Session: Not started")
+                
+            # Update duplicate count
+            self.duplicate_count_var.set(f"Duplicates: {self.duplicate_bounties_skipped}")
                 
         except Exception as e:
             print(f"Error updating bounty display: {e}")
