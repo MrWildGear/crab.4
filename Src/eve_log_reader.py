@@ -35,6 +35,19 @@ class EVELogReader:
         self.total_bounty_isk = 0  # Total ISK earned from bounties
         self.bounty_session_start = None  # When bounty tracking started
         
+        # CONCORD Rogue Analysis Beacon tracking system
+        self.concord_link_start = None  # When the link process started
+        self.concord_link_completed = False  # Whether the link process completed
+        self.concord_countdown_active = False  # Whether countdown is active
+        self.concord_countdown_thread = None  # Thread for countdown timer
+        self.stop_concord_countdown = False  # Flag to stop countdown
+        self.concord_countdown_color = "#ffff00"  # Default yellow color for countdown
+        
+        # CRAB-specific bounty tracking system
+        self.crab_bounty_entries = []  # Store bounty entries during CRAB sessions
+        self.crab_total_bounty_isk = 0  # Total ISK earned during CRAB sessions
+        self.crab_session_active = False  # Whether a CRAB session is currently active
+        
         # Settings for recent file filtering
         self.max_days_old = 1  # Only show logs from last 24 hours by default
         self.max_files_to_show = 10  # Maximum number of recent files to display
@@ -257,8 +270,114 @@ class EVELogReader:
                                      font=("Segoe UI", 9))
         show_bounties_btn.grid(row=0, column=4, padx=(20, 0))
         
+        # CONCORD Rogue Analysis Beacon tracking display
+        concord_frame = ttk.LabelFrame(main_frame, text="🔗 CONCORD Rogue Analysis Beacon", padding="5")
+        concord_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        # CONCORD status labels
+        self.concord_status_var = tk.StringVar(value="Status: Inactive")
+        concord_status_label = ttk.Label(concord_frame, textvariable=self.concord_status_var, 
+                                        font=("Segoe UI", 10, "bold"))
+        concord_status_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 20))
+        
+        self.concord_countdown_var = tk.StringVar(value="Countdown: --:--")
+        self.concord_countdown_label = ttk.Label(concord_frame, textvariable=self.concord_countdown_var,
+                                                font=("Consolas", 10, "bold"), foreground=self.concord_countdown_color)
+        self.concord_countdown_label.grid(row=0, column=1, sticky=tk.W, padx=(0, 20))
+        
+        self.concord_time_var = tk.StringVar(value="Link Time: Not started")
+        concord_time_label = ttk.Label(concord_frame, textvariable=self.concord_time_var)
+        concord_time_label.grid(row=0, column=2, sticky=tk.W, padx=(0, 20))
+        
+        # CONCORD control buttons
+        reset_concord_btn = tk.Button(concord_frame, text="Reset CONCORD Tracking", command=self.reset_concord_tracking,
+                                     bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                     activebackground="#404040",   # Darker when clicked
+                                     activeforeground="#ffffff",  # White text when clicked
+                                     relief="raised", borderwidth=1,
+                                     font=("Segoe UI", 9))
+        reset_concord_btn.grid(row=0, column=3, padx=(20, 0))
+        
+        # Test buttons for CONCORD messages
+        test_link_start_btn = tk.Button(concord_frame, text="Test Link Start", command=self.test_concord_link_start,
+                                       bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                       activebackground="#404040",   # Darker when clicked
+                                       activeforeground="#ffffff",  # White text when clicked
+                                       relief="raised", borderwidth=1,
+                                       font=("Segoe UI", 9))
+        test_link_start_btn.grid(row=0, column=4, padx=(20, 0))
+        
+        test_link_complete_btn = tk.Button(concord_frame, text="Test Link Complete", command=self.test_concord_link_complete,
+                                           bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                           activebackground="#404040",   # Darker when clicked
+                                           activeforeground="#ffffff",  # White text when clicked
+                                           relief="raised", borderwidth=1,
+                                           font=("Segoe UI", 9))
+        test_link_complete_btn.grid(row=0, column=5, padx=(20, 0))
+        
+        # CRAB end process buttons
+        end_crab_failed_btn = tk.Button(concord_frame, text="Failed", command=self.end_crab_failed,
+                                        bg="#ff4444", fg="#ffffff",  # Red background for failed
+                                        activebackground="#cc3333",   # Darker red when clicked
+                                        activeforeground="#ffffff",  # White text when clicked
+                                        relief="raised", borderwidth=1,
+                                        font=("Segoe UI", 9))
+        end_crab_failed_btn.grid(row=0, column=6, padx=(20, 0))
+        
+        end_crab_submit_btn = tk.Button(concord_frame, text="Submit Data", command=self.end_crab_submit,
+                                        bg="#44ff44", fg="#000000",  # Green background for submit
+                                        activebackground="#33cc33",   # Darker green when clicked
+                                        activeforeground="#000000",  # Black text when clicked
+                                        relief="raised", borderwidth=1,
+                                        font=("Segoe UI", 9))
+        end_crab_submit_btn.grid(row=0, column=7, padx=(20, 0))
+        
+        # CRAB Bounty Tracking display
+        crab_bounty_frame = ttk.LabelFrame(main_frame, text="🦀 CRAB Bounty Tracking", padding="5")
+        crab_bounty_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        # CRAB bounty info labels
+        self.crab_bounty_total_var = tk.StringVar(value="CRAB Total ISK: 0 ISK")
+        crab_bounty_total_label = ttk.Label(crab_bounty_frame, textvariable=self.crab_bounty_total_var, 
+                                           font=("Segoe UI", 10, "bold"))
+        crab_bounty_total_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 20))
+        
+        self.crab_bounty_count_var = tk.StringVar(value="CRAB Bounties: 0")
+        crab_bounty_count_label = ttk.Label(crab_bounty_frame, textvariable=self.crab_bounty_count_var)
+        crab_bounty_count_label.grid(row=0, column=1, sticky=tk.W, padx=(0, 20))
+        
+        self.crab_session_var = tk.StringVar(value="CRAB Session: Inactive")
+        crab_session_label = ttk.Label(crab_bounty_frame, textvariable=self.crab_session_var)
+        crab_session_label.grid(row=0, column=2, sticky=tk.W, padx=(0, 20))
+        
+        # CRAB bounty control buttons
+        reset_crab_bounty_btn = tk.Button(crab_bounty_frame, text="Reset CRAB Bounties", command=self.reset_crab_bounty_tracking,
+                                         bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                         activebackground="#404040",   # Darker when clicked
+                                         activeforeground="#ffffff",  # White text when clicked
+                                         relief="raised", borderwidth=1,
+                                         font=("Segoe UI", 9))
+        reset_crab_bounty_btn.grid(row=0, column=3, padx=(20, 0))
+        
+        show_crab_bounties_btn = tk.Button(crab_bounty_frame, text="Show CRAB Details", command=self.show_crab_bounty_details,
+                                          bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                          activebackground="#404040",   # Darker when clicked
+                                          activeforeground="#ffffff",  # White text when clicked
+                                          relief="raised", borderwidth=1,
+                                          font=("Segoe UI", 9))
+        show_crab_bounties_btn.grid(row=0, column=4, padx=(20, 0))
+        
+        # Add CRAB bounty button for testing
+        add_crab_bounty_btn = tk.Button(crab_bounty_frame, text="Add CRAB Bounty", command=self.add_test_crab_bounty,
+                                       bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                       activebackground="#404040",   # Darker when clicked
+                                       activeforeground="#ffffff",  # White text when clicked
+                                       relief="raised", borderwidth=1,
+                                       font=("Segoe UI", 9))
+        add_crab_bounty_btn.grid(row=0, column=5, padx=(20, 0))
+        
         status_frame = ttk.Frame(main_frame)
-        status_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        status_frame.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         # Create text widget with scrollbar for combined logs
         self.text_widget = tk.Text(status_frame, wrap=tk.WORD, height=25,
@@ -282,7 +401,7 @@ class EVELogReader:
         # Status bar
         self.status_var = tk.StringVar(value="Ready - Monitoring recent log files only")
         status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN)
-        status_bar.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
+        status_bar.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
         
         # Apply dark styling to status bar
         style = ttk.Style()
@@ -296,7 +415,7 @@ class EVELogReader:
         
         # Control buttons
         control_frame = ttk.Frame(main_frame)
-        control_frame.grid(row=7, column=0, columnspan=2, pady=(10, 0))
+        control_frame.grid(row=9, column=0, columnspan=2, pady=(10, 0))
         
         # High-frequency monitoring checkbox
         self.high_freq_var = tk.BooleanVar(value=True)
@@ -542,8 +661,31 @@ class EVELogReader:
                                 if not bounty_exists:
                                     print(f"💰 Processing bounty: {bounty_amount:,} ISK from {source_file}")
                                     self.add_bounty_entry(timestamp, bounty_amount, source_file)
+                                    
+                                    # Also track in CRAB if session is active
+                                    if self.crab_session_active:
+                                        self.add_crab_bounty_entry(timestamp, bounty_amount, source_file)
                                 else:
                                     print(f"🔄 Skipping duplicate bounty: {bounty_amount:,} ISK from {source_file}")
+                            
+                            # Check for CONCORD link messages
+                            concord_message_type = self.detect_concord_message(line)
+                            if concord_message_type == "link_start":
+                                self.concord_link_start = datetime.now()
+                                self.concord_status_var.set("Status: Linking")
+                                self.concord_countdown_active = True
+                                self.start_concord_countdown()
+                                # Start CRAB bounty tracking session
+                                self.start_crab_session()
+                            elif concord_message_type == "link_complete":
+                                self.concord_link_completed = True
+                                self.concord_status_var.set("Status: Active")
+                                # Don't stop the countdown - let it continue to show total elapsed time
+                                # self.concord_countdown_active = False
+                                # self.stop_concord_countdown = True
+                                self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {datetime.now().strftime('%H:%M:%S')}")
+                                self.update_concord_display()
+                                # CRAB session status will be updated by update_concord_display()
                             
                             self.all_log_entries.append((timestamp, line, source_file))
                         
@@ -590,10 +732,23 @@ class EVELogReader:
             if self.bounty_entries:
                 status_text += f" | 💰 Bounties: {len(self.bounty_entries)} ({self.total_bounty_isk:,} ISK)"
             
+            # Add CRAB bounty information to status
+            if self.crab_session_active:
+                status_text += f" | 🦀 CRAB: {len(self.crab_bounty_entries)} ({self.crab_total_bounty_isk:,} ISK)"
+            
+            # Add CONCORD information to status
+            if self.concord_countdown_active and not self.concord_link_completed:
+                status_text += " | 🔗 CONCORD: Linking"
+            elif self.concord_link_completed:
+                status_text += " | 🔗 CONCORD: Active"
+            
             self.status_var.set(status_text)
             
             # Update bounty display
             self.update_bounty_display()
+            
+            # Update CONCORD display
+            self.update_concord_display()
             
             # Scan for any bounties that might have been missed
             self.scan_existing_bounties()
@@ -755,6 +910,222 @@ class EVELogReader:
         
         return None
     
+    def detect_concord_message(self, line):
+        """Detect CONCORD Rogue Analysis Beacon messages"""
+        # Pattern for link start message
+        link_start_pattern = r'Your ship has started the link process with CONCORD Rogue Analysis Beacon'
+        
+        # Pattern for link completion message
+        link_complete_pattern = r'Your ship successfully completed the link process with CONCORD Rogue Analysis Beacon'
+        
+        if re.search(link_start_pattern, line, re.IGNORECASE):
+            print("🔗 CONCORD link process started detected")
+            return "link_start"
+        elif re.search(link_complete_pattern, line, re.IGNORECASE):
+            print("✅ CONCORD link process completed detected")
+            return "link_complete"
+        
+        return None
+    
+    def start_concord_countdown(self):
+        """Start the 60-minute countdown timer for CONCORD link"""
+        if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
+            return  # Already running
+        
+        self.stop_concord_countdown = False
+        self.concord_countdown_thread = threading.Thread(target=self.concord_countdown_loop, daemon=True)
+        self.concord_countdown_thread.start()
+        print("🔗 CONCORD countdown timer started")
+    
+    def concord_countdown_loop(self):
+        """Countdown loop for CONCORD link process"""
+        start_time = datetime.now()
+        target_time = start_time + timedelta(minutes=60)
+        
+        while not self.stop_concord_countdown:
+            current_time = datetime.now()
+            
+            if self.concord_link_completed:
+                # Link completed - show countdown format but in green
+                remaining = target_time - current_time
+                minutes = int(remaining.total_seconds() // 60)
+                seconds = int(remaining.total_seconds() % 60)
+                countdown_text = f"Countdown: {minutes:02d}:{seconds:02d}"
+                color = "#00ff00"  # Green for completed
+            else:
+                # Link still active - show countdown
+                remaining = target_time - current_time
+                
+                if remaining.total_seconds() <= 0:
+                    # Time's up!
+                    self.root.after(0, self.concord_countdown_expired)
+                    break
+                
+                # Update countdown display
+                minutes = int(remaining.total_seconds() // 60)
+                seconds = int(remaining.total_seconds() % 60)
+                countdown_text = f"Countdown: {minutes:02d}:{seconds:02d}"
+                
+                # Always yellow while linking (until completion)
+                color = "#ffff00"  # Yellow while linking
+            
+            self.root.after(0, lambda: self.update_concord_countdown(countdown_text, color))
+            
+            time.sleep(1)  # Update every second
+    
+    def update_concord_countdown(self, text, color):
+        """Update the countdown display with new text and color"""
+        self.concord_countdown_var.set(text)
+        # Update the countdown label color
+        self.concord_countdown_color = color
+        self.concord_countdown_label.configure(foreground=color)
+    
+    def concord_countdown_expired(self):
+        """Handle countdown expiration"""
+        self.concord_status_var.set("Status: EXPIRED (Linking)")
+        self.concord_countdown_var.set("Countdown: EXPIRED")
+        self.concord_countdown_active = False
+        print("⚠️ CONCORD link countdown expired!")
+    
+    def update_concord_display(self):
+        """Update the CONCORD display with current status"""
+        if self.concord_link_start:
+            if self.concord_link_completed:
+                self.concord_status_var.set("Status: Active")
+                # Don't change countdown text here - let the countdown loop handle it
+            else:
+                self.concord_status_var.set("Status: Linking")
+        else:
+            self.concord_status_var.set("Status: Inactive")
+            self.concord_countdown_var.set("Countdown: --:--")
+        
+        # Update CRAB session status to match CONCORD status
+        self.update_crab_session_status()
+    
+    def reset_concord_tracking(self):
+        """Reset CONCORD tracking to start fresh"""
+        if self.concord_countdown_active:
+            # Ask for confirmation
+            result = messagebox.askyesno(
+                "Reset CONCORD Tracking", 
+                "Are you sure you want to reset CONCORD tracking?\n\n"
+                "This will stop the current countdown and clear all tracking data.\n\n"
+                "This action cannot be undone."
+            )
+            
+            if not result:
+                return
+        
+        # Stop countdown if running
+        self.stop_concord_countdown = True
+        if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
+            self.concord_countdown_thread.join(timeout=1)
+        
+        # Reset all variables
+        self.concord_link_start = None
+        self.concord_link_completed = False
+        self.concord_countdown_active = False
+        self.stop_concord_countdown = False
+        
+        # Reset CRAB tracking
+        self.reset_crab_bounty_tracking()
+        
+        # Update display
+        self.update_concord_display()
+        print("🔄 CONCORD tracking reset")
+    
+    def test_concord_link_start(self):
+        """Test function to simulate CONCORD link start message"""
+        print("🧪 Testing CONCORD link start...")
+        self.concord_link_start = datetime.now()
+        self.concord_status_var.set("Status: Linking")
+        self.concord_countdown_active = True
+        self.start_concord_countdown()
+        self.concord_time_var.set(f"Link Time: Started at {self.concord_link_start.strftime('%H:%M:%S')}")
+        # Update displays to sync CRAB session status
+        self.update_concord_display()
+    
+    def test_concord_link_complete(self):
+        """Test function to simulate CONCORD link completion message"""
+        print("🧪 Testing CONCORD link completion...")
+        if self.concord_link_start:
+            self.concord_link_completed = True
+            self.concord_status_var.set("Status: Active")
+            # Don't stop the countdown - let it continue to show elapsed time
+            # self.concord_countdown_active = False
+            # self.stop_concord_countdown = True
+            completion_time = datetime.now()
+            self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {completion_time.strftime('%H:%M:%S')}")
+            self.update_concord_display()
+            # CRAB session status will be updated by update_concord_display()
+        else:
+            messagebox.showwarning("Test Warning", "No link process started. Start a link first.")
+    
+    def end_crab_failed(self):
+        """End CRAB session as failed - clear countdown and mark as failed"""
+        if not self.concord_link_start:
+            messagebox.showwarning("End CRAB Failed", "No CRAB session is currently running.")
+            return
+        
+        # Ask for confirmation
+        result = messagebox.askyesno(
+            "End CRAB Session - Failed", 
+            "Are you sure you want to end the CRAB session as failed?\n\n"
+            "This will stop the countdown and mark the session as failed.\n\n"
+            "This action cannot be undone."
+        )
+        
+        if result:
+            # Stop the countdown
+            self.stop_concord_countdown = True
+            if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
+                self.concord_countdown_thread.join(timeout=1)
+            
+            # Mark as completed but failed
+            self.concord_link_completed = True
+            self.concord_status_var.set("Status: Failed")
+            self.concord_countdown_var.set("Countdown: --:--")
+            completion_time = datetime.now()
+            self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {completion_time.strftime('%H:%M:%S')}")
+            
+            # End CRAB session
+            self.end_crab_session()
+            
+            # Update display
+            self.update_concord_display()
+            print("❌ CRAB session ended as failed")
+    
+    def end_crab_submit(self):
+        """End CRAB session and submit data from clipboard - clear countdown and mark as completed"""
+        if not self.concord_link_start:
+            messagebox.showwarning("End CRAB Submit", "No CRAB session is currently running.")
+            return
+        
+        # Ask for confirmation
+        result = messagebox.askyesno(
+            "End CRAB Session - Submit Data", 
+            "Are you sure you want to end the CRAB session and submit data?\n\n"
+            "This will stop the countdown and mark the session as completed.\n\n"
+            "This action cannot be undone."
+        )
+        
+        if result:
+            # Stop the countdown
+            self.stop_concord_countdown = True
+            if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
+                self.concord_countdown_thread.join(timeout=1)
+            
+            # Mark as completed successfully
+            self.concord_link_completed = True
+            self.concord_status_var.set("Status: Completed")
+            self.concord_countdown_var.set("Countdown: --:--")
+            completion_time = datetime.now()
+            self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {completion_time.strftime('%H:%M:%S')}")
+            
+            # Update display
+            self.update_concord_display()
+            print("✅ CRAB session completed and data ready for submission")
+    
     def add_bounty_entry(self, timestamp, isk_amount, source_file):
         """Add a new bounty entry to the tracking system"""
         if self.bounty_session_start is None:
@@ -896,6 +1267,12 @@ class EVELogReader:
                 status_text += " | High-freq: ON"
             else:
                 status_text += " | High-freq: OFF"
+            
+            # Add CONCORD status
+            if self.concord_countdown_active and not self.concord_link_completed:
+                status_text += " | 🔗 CONCORD: Linking"
+            elif self.concord_link_completed:
+                status_text += " | 🔗 CONCORD: Active"
             
             self.status_var.set(status_text)
     
@@ -1276,6 +1653,218 @@ class EVELogReader:
         except Exception as e:
             messagebox.showerror("Export Error", f"Error exporting bounties: {str(e)}")
             self.status_var.set(f"Export error: {str(e)}")
+    
+    # CRAB Bounty Tracking Functions
+    def add_crab_bounty_entry(self, timestamp, isk_amount, source_file):
+        """Add a new bounty entry to the CRAB tracking system"""
+        if not self.crab_session_active:
+            print("⚠️ CRAB session not active - bounty not tracked")
+            return
+        
+        bounty_entry = {
+            'timestamp': timestamp,
+            'isk_amount': isk_amount,
+            'source_file': source_file,
+            'running_total': self.crab_total_bounty_isk + isk_amount
+        }
+        
+        self.crab_bounty_entries.append(bounty_entry)
+        self.crab_total_bounty_isk += isk_amount
+        
+        print(f"🦀 CRAB bounty tracked: {isk_amount:,} ISK (CRAB Total: {self.crab_total_bounty_isk:,} ISK)")
+        self.update_crab_bounty_display()
+    
+    def reset_crab_bounty_tracking(self):
+        """Reset CRAB bounty tracking to start fresh"""
+        if self.crab_bounty_entries:
+            # Ask for confirmation
+            result = messagebox.askyesno(
+                "Reset CRAB Bounty Tracking", 
+                f"Are you sure you want to reset CRAB bounty tracking?\n\n"
+                f"This will clear {len(self.crab_bounty_entries)} CRAB bounty entries "
+                f"and {self.crab_total_bounty_isk:,} ISK in tracked earnings.\n\n"
+                f"This action cannot be undone."
+            )
+            
+            if not result:
+                return
+        
+        self.crab_bounty_entries = []
+        self.crab_total_bounty_isk = 0
+        self.update_crab_bounty_display()
+        print("🔄 CRAB bounty tracking reset")
+    
+    def show_crab_bounty_details(self):
+        """Show detailed CRAB bounty information in a popup window"""
+        try:
+            if not self.crab_bounty_entries:
+                messagebox.showinfo("CRAB Bounty Details", "No CRAB bounties tracked yet.")
+                return
+            
+            # Create popup window
+            popup = tk.Toplevel(self.root)
+            popup.title("🦀 CRAB Bounty Details")
+            popup.geometry("800x600")
+            popup.transient(self.root)
+            popup.grab_set()
+            popup.configure(bg="#2b2b2b")  # Dark background
+            
+            # Create text widget
+            text_widget = tk.Text(popup, wrap=tk.WORD, font=("Consolas", 10),
+                                 bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                 insertbackground="#ffffff",   # White cursor
+                                 selectbackground="#4a9eff",  # Blue selection
+                                 selectforeground="#ffffff")  # White text when selected
+            scrollbar = tk.Scrollbar(popup, orient=tk.VERTICAL, command=text_widget.yview,
+                                    bg="#1e1e1e", troughcolor="#2b2b2b",  # Dark scrollbar
+                                    activebackground="#404040",            # Darker when active
+                                    relief="flat", borderwidth=0)
+            text_widget.configure(yscrollcommand=scrollbar.set)
+            
+            text_widget.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=10)
+            scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+            
+            popup.columnconfigure(0, weight=1)
+            popup.rowconfigure(0, weight=1)
+            
+            # Add header
+            text_widget.insert(tk.END, "🦀 CRAB Bounty Tracking Details\n")
+            text_widget.insert(tk.END, "=" * 80 + "\n\n")
+            
+            # Session info
+            if self.concord_link_start:
+                text_widget.insert(tk.END, f"CRAB Session Started: {self.concord_link_start.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                if self.concord_link_completed:
+                    completion_time = datetime.now()
+                    session_duration = completion_time - self.concord_link_start
+                    hours = int(session_duration.total_seconds() // 3600)
+                    minutes = int((session_duration.total_seconds() % 3600) // 60)
+                    text_widget.insert(tk.END, f"CRAB Session Duration: {hours}h {minutes}m\n")
+                else:
+                    text_widget.insert(tk.END, "CRAB Session Status: Active\n")
+                
+                text_widget.insert(tk.END, f"Total CRAB Bounties: {len(self.crab_bounty_entries)}\n")
+                text_widget.insert(tk.END, f"Total CRAB ISK Earned: {self.crab_total_bounty_isk:,} ISK\n")
+                
+                if self.crab_bounty_entries:
+                    # Calculate ISK per hour if session completed
+                    if self.concord_link_completed:
+                        session_duration = completion_time - self.concord_link_start
+                        if session_duration.total_seconds() > 0:
+                            isk_per_hour = (self.crab_total_bounty_isk / session_duration.total_seconds()) * 3600
+                            text_widget.insert(tk.END, f"CRAB ISK per Hour: {isk_per_hour:,.0f} ISK/h\n")
+                
+                text_widget.insert(tk.END, "\n" + "=" * 80 + "\n\n")
+            
+            # Individual bounty entries
+            text_widget.insert(tk.END, "Individual CRAB Bounty Entries (Newest First):\n")
+            text_widget.insert(tk.END, "-" * 80 + "\n\n")
+            
+            # Sort entries by timestamp (newest first)
+            sorted_entries = sorted(self.crab_bounty_entries, key=lambda x: x['timestamp'], reverse=True)
+            
+            for i, entry in enumerate(sorted_entries, 1):
+                timestamp = entry['timestamp']
+                isk_amount = entry['isk_amount']
+                source_file = entry['source_file']
+                running_total = entry['running_total']
+                
+                text_widget.insert(tk.END, f"{i:2d}. {timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                text_widget.insert(tk.END, f"    Amount: {isk_amount:,} ISK\n")
+                text_widget.insert(tk.END, f"    Source: {source_file}\n")
+                text_widget.insert(tk.END, f"    Running Total: {running_total:,} ISK\n")
+                text_widget.insert(tk.END, "-" * 40 + "\n")
+            
+            # Summary
+            text_widget.insert(tk.END, f"\n📊 CRAB Summary:\n")
+            text_widget.insert(tk.END, f"Total CRAB Bounties: {len(self.crab_bounty_entries)}\n")
+            text_widget.insert(tk.END, f"Total CRAB ISK: {self.crab_total_bounty_isk:,} ISK\n")
+            
+            if self.crab_bounty_entries:
+                avg_bounty = self.crab_total_bounty_isk / len(self.crab_bounty_entries)
+                text_widget.insert(tk.END, f"Average CRAB Bounty: {avg_bounty:,.0f} ISK\n")
+                
+                # Largest and smallest bounties
+                largest = max(self.crab_bounty_entries, key=lambda x: x['isk_amount'])
+                smallest = min(self.crab_bounty_entries, key=lambda x: x['isk_amount'])
+                text_widget.insert(tk.END, f"Largest CRAB Bounty: {largest['isk_amount']:,} ISK\n")
+                text_widget.insert(tk.END, f"Smallest CRAB Bounty: {smallest['isk_amount']:,} ISK\n")
+            
+            # Make text read-only
+            text_widget.config(state=tk.DISABLED)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Error showing CRAB bounty details: {str(e)}")
+    
+    def update_crab_bounty_display(self):
+        """Update the CRAB bounty display labels with current information"""
+        try:
+            # Update total ISK
+            self.crab_bounty_total_var.set(f"CRAB Total ISK: {self.crab_total_bounty_isk:,} ISK")
+            
+            # Update bounty count
+            self.crab_bounty_count_var.set(f"CRAB Bounties: {len(self.crab_bounty_entries)}")
+            
+            # Update session info
+            if self.crab_session_active:
+                self.crab_session_var.set("CRAB Session: Active")
+            else:
+                self.crab_session_var.set("CRAB Session: Inactive")
+                
+        except Exception as e:
+            print(f"Error updating CRAB bounty display: {e}")
+    
+    def add_test_crab_bounty(self):
+        """Test function to add a CRAB bounty for testing"""
+        if not self.crab_session_active:
+            messagebox.showwarning("CRAB Session Required", "CRAB session must be active to add bounties.\n\nStart a CONCORD link first.")
+            return
+        
+        # Create a test bounty entry
+        test_timestamp = datetime.now()
+        test_isk = 50000  # 50k ISK test bounty
+        
+        self.add_crab_bounty_entry(test_timestamp, test_isk, "TEST_CRAB_BOUNTY")
+        print(f"🧪 Test CRAB bounty added: {test_isk:,} ISK")
+    
+    def start_crab_session(self):
+        """Start a CRAB bounty tracking session"""
+        self.crab_session_active = True
+        self.update_crab_bounty_display()
+        print("🦀 CRAB bounty tracking session started")
+    
+    def end_crab_session(self):
+        """End the CRAB bounty tracking session"""
+        self.crab_session_active = False
+        self.update_crab_bounty_display()
+        print("🦀 CRAB bounty tracking session ended")
+    
+    def update_crab_session_status(self):
+        """Update CRAB session status to match CONCORD status"""
+        if self.concord_link_start:
+            if self.concord_link_completed:
+                # Check if this was manually ended with a specific status
+                current_status = self.concord_status_var.get()
+                if "Failed" in current_status:
+                    # Keep the Failed status
+                    self.crab_session_active = False
+                    self.crab_session_var.set("CRAB Session: Failed")
+                elif "Completed" in current_status:
+                    # Keep the Completed status  
+                    self.crab_session_active = False
+                    self.crab_session_var.set("CRAB Session: Completed")
+                else:
+                    # CONCORD is Active, so CRAB should also be Active
+                    self.crab_session_active = True
+                    self.crab_session_var.set("CRAB Session: Active")
+            else:
+                # CONCORD is Linking, so CRAB should also be Linking
+                self.crab_session_active = True
+                self.crab_session_var.set("CRAB Session: Linking")
+        else:
+            # No CONCORD link, CRAB is inactive
+            self.crab_session_active = False
+            self.crab_session_var.set("CRAB Session: Inactive")
 
 def main():
     root = tk.Tk()
