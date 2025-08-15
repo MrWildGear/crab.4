@@ -30,12 +30,20 @@ class EVELogReader:
         self.last_file_sizes = {}
         self.last_file_hashes = {}  # Store content hashes for change detection
         
+        # Bounty tracking system
+        self.bounty_entries = []  # Store bounty entries with timestamps
+        self.total_bounty_isk = 0  # Total ISK earned from bounties
+        self.bounty_session_start = None  # When bounty tracking started
+        
         # Settings for recent file filtering
         self.max_days_old = 1  # Only show logs from last 24 hours by default
         self.max_files_to_show = 10  # Maximum number of recent files to display
         
         self.setup_ui()
         self.load_log_files()
+        
+        # Start bounty tracking
+        self.bounty_session_start = datetime.now()
         
         # Start monitoring automatically since it's enabled by default
         if self.high_freq_var.get():
@@ -214,8 +222,43 @@ class EVELogReader:
         # File monitoring status
         ttk.Label(main_frame, text="Recent Logs (UTC Timestamp Based):").grid(row=3, column=0, sticky=tk.W, pady=(10, 5))
         
+        # Bounty tracking display
+        bounty_frame = ttk.LabelFrame(main_frame, text="💰 Bounty Tracking", padding="5")
+        bounty_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        # Bounty info labels
+        self.bounty_total_var = tk.StringVar(value="Total ISK Earned: 0 ISK")
+        bounty_total_label = ttk.Label(bounty_frame, textvariable=self.bounty_total_var, 
+                                      font=("Segoe UI", 10, "bold"))
+        bounty_total_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 20))
+        
+        self.bounty_count_var = tk.StringVar(value="Bounties: 0")
+        bounty_count_label = ttk.Label(bounty_frame, textvariable=self.bounty_count_var)
+        bounty_count_label.grid(row=0, column=1, sticky=tk.W, padx=(0, 20))
+        
+        self.bounty_session_var = tk.StringVar(value="Session: Not started")
+        bounty_session_label = ttk.Label(bounty_frame, textvariable=self.bounty_session_var)
+        bounty_session_label.grid(row=0, column=2, sticky=tk.W, padx=(0, 20))
+        
+        # Bounty control buttons
+        reset_bounty_btn = tk.Button(bounty_frame, text="Reset Bounty Tracking", command=self.reset_bounty_tracking,
+                                    bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                    activebackground="#404040",   # Darker when clicked
+                                    activeforeground="#ffffff",  # White text when clicked
+                                    relief="raised", borderwidth=1,
+                                    font=("Segoe UI", 9))
+        reset_bounty_btn.grid(row=0, column=3, padx=(20, 0))
+        
+        show_bounties_btn = tk.Button(bounty_frame, text="Show Bounty Details", command=self.show_bounty_details,
+                                     bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                     activebackground="#404040",   # Darker when clicked
+                                     activeforeground="#ffffff",  # White text when clicked
+                                     relief="raised", borderwidth=1,
+                                     font=("Segoe UI", 9))
+        show_bounties_btn.grid(row=0, column=4, padx=(20, 0))
+        
         status_frame = ttk.Frame(main_frame)
-        status_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        status_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         # Create text widget with scrollbar for combined logs
         self.text_widget = tk.Text(status_frame, wrap=tk.WORD, height=25,
@@ -239,7 +282,7 @@ class EVELogReader:
         # Status bar
         self.status_var = tk.StringVar(value="Ready - Monitoring recent log files only")
         status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN)
-        status_bar.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
+        status_bar.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
         
         # Apply dark styling to status bar
         style = ttk.Style()
@@ -253,7 +296,7 @@ class EVELogReader:
         
         # Control buttons
         control_frame = ttk.Frame(main_frame)
-        control_frame.grid(row=6, column=0, columnspan=2, pady=(10, 0))
+        control_frame.grid(row=7, column=0, columnspan=2, pady=(10, 0))
         
         # High-frequency monitoring checkbox
         self.high_freq_var = tk.BooleanVar(value=True)
@@ -294,6 +337,15 @@ class EVELogReader:
                               font=("Segoe UI", 9))
         export_btn.grid(row=0, column=4)
         
+        # Export bounties button
+        export_bounties_btn = tk.Button(control_frame, text="Export Bounties", command=self.export_bounties,
+                                       bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                       activebackground="#404040",   # Darker when clicked
+                                       activeforeground="#ffffff",  # White text when clicked
+                                       relief="raised", borderwidth=1,
+                                       font=("Segoe UI", 9))
+        export_bounties_btn.grid(row=0, column=5, padx=(20, 0))
+        
         # Test log creation button (for debugging auto-refresh)
         test_log_btn = tk.Button(control_frame, text="Create Test Log", command=self.create_test_log,
                                 bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
@@ -301,7 +353,7 @@ class EVELogReader:
                                 activeforeground="#ffffff",  # White text when clicked
                                 relief="raised", borderwidth=1,
                                 font=("Segoe UI", 9))
-        test_log_btn.grid(row=0, column=5, padx=(20, 0))
+        test_log_btn.grid(row=0, column=6, padx=(20, 0))
         
         # Show file times button (for debugging)
         show_times_btn = tk.Button(control_frame, text="Show File Times", command=self.show_file_times,
@@ -310,7 +362,7 @@ class EVELogReader:
                                   activeforeground="#ffffff",  # White text when clicked
                                   relief="raised", borderwidth=1,
                                   font=("Segoe UI", 9))
-        show_times_btn.grid(row=0, column=6, padx=(20, 0))
+        show_times_btn.grid(row=0, column=7, padx=(20, 0))
         
         # Show file hashes button (for debugging content detection)
         show_hashes_btn = tk.Button(control_frame, text="Show File Hashes", command=self.show_file_hashes,
@@ -319,7 +371,7 @@ class EVELogReader:
                                    activeforeground="#ffffff",  # White text when clicked
                                    relief="raised", borderwidth=1,
                                    font=("Segoe UI", 9))
-        show_hashes_btn.grid(row=0, column=7, padx=(20, 0))
+        show_hashes_btn.grid(row=0, column=8, padx=(20, 0))
         
         self.auto_refresh_thread = None
         self.stop_auto_refresh = False
@@ -445,6 +497,12 @@ class EVELogReader:
                         for line in lines:
                             timestamp = self.extract_timestamp(line)
                             source_file = log_file.name
+                            
+                            # Check for bounty entries
+                            bounty_amount = self.extract_bounty(line)
+                            if bounty_amount and timestamp:
+                                self.add_bounty_entry(timestamp, bounty_amount, source_file)
+                            
                             self.all_log_entries.append((timestamp, line, source_file))
                         
                         total_lines += len(lines)
@@ -486,7 +544,14 @@ class EVELogReader:
             else:
                 status_text += " | High-freq: OFF"
             
+            # Add bounty information to status
+            if self.bounty_entries:
+                status_text += f" | 💰 Bounties: {len(self.bounty_entries)} ({self.total_bounty_isk:,} ISK)"
+            
             self.status_var.set(status_text)
+            
+            # Update bounty display
+            self.update_bounty_display()
             
         except Exception as e:
             self.status_var.set(f"Error refreshing logs: {str(e)}")
@@ -619,6 +684,60 @@ class EVELogReader:
                     continue
         
         return None
+    
+    def extract_bounty(self, line):
+        """Extract bounty information from log line"""
+        # Pattern for bounty entries: (bounty) <font size=12><b><color=0xff00aa00>AMOUNT ISK</color> added to next bounty payout
+        bounty_pattern = r'\(bounty\)\s*<font[^>]*><b><color[^>]*>([\d,]+)\s+ISK</color>[^>]*>.*?added to next bounty payout'
+        match = re.search(bounty_pattern, line)
+        
+        if match:
+            try:
+                # Remove commas and convert to integer
+                isk_amount = int(match.group(1).replace(',', ''))
+                return isk_amount
+            except ValueError:
+                return None
+        
+        return None
+    
+    def add_bounty_entry(self, timestamp, isk_amount, source_file):
+        """Add a new bounty entry to the tracking system"""
+        if self.bounty_session_start is None:
+            self.bounty_session_start = datetime.now()
+        
+        bounty_entry = {
+            'timestamp': timestamp,
+            'isk_amount': isk_amount,
+            'source_file': source_file,
+            'running_total': self.total_bounty_isk + isk_amount
+        }
+        
+        self.bounty_entries.append(bounty_entry)
+        self.total_bounty_isk += isk_amount
+        
+        print(f"💰 Bounty tracked: {isk_amount:,} ISK (Total: {self.total_bounty_isk:,} ISK)")
+    
+    def reset_bounty_tracking(self):
+        """Reset bounty tracking to start fresh"""
+        if self.bounty_entries:
+            # Ask for confirmation
+            result = messagebox.askyesno(
+                "Reset Bounty Tracking", 
+                f"Are you sure you want to reset bounty tracking?\n\n"
+                f"This will clear {len(self.bounty_entries)} bounty entries "
+                f"and {self.total_bounty_isk:,} ISK in tracked earnings.\n\n"
+                f"This action cannot be undone."
+            )
+            
+            if not result:
+                return
+        
+        self.bounty_entries = []
+        self.total_bounty_isk = 0
+        self.bounty_session_start = datetime.now()
+        self.update_bounty_display()
+        print("🔄 Bounty tracking reset")
     
     def toggle_high_frequency(self):
         """Toggle high-frequency monitoring functionality"""
@@ -947,6 +1066,161 @@ class EVELogReader:
                 
         except Exception as e:
             messagebox.showerror("Export Error", f"Error exporting logs: {str(e)}")
+            self.status_var.set(f"Export error: {str(e)}")
+
+    def show_bounty_details(self):
+        """Show detailed bounty information in a popup window"""
+        try:
+            if not self.bounty_entries:
+                messagebox.showinfo("Bounty Details", "No bounties tracked yet.")
+                return
+            
+            # Create popup window
+            popup = tk.Toplevel(self.root)
+            popup.title("💰 Bounty Details")
+            popup.geometry("800x600")
+            popup.transient(self.root)
+            popup.grab_set()
+            popup.configure(bg="#2b2b2b")  # Dark background
+            
+            # Create text widget
+            text_widget = tk.Text(popup, wrap=tk.WORD, font=("Consolas", 10),
+                                 bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                 insertbackground="#ffffff",   # White cursor
+                                 selectbackground="#4a9eff",  # Blue selection
+                                 selectforeground="#ffffff")  # White text when selected
+            scrollbar = tk.Scrollbar(popup, orient=tk.VERTICAL, command=text_widget.yview,
+                                    bg="#1e1e1e", troughcolor="#2b2b2b",  # Dark scrollbar
+                                    activebackground="#404040",            # Darker when active
+                                    relief="flat", borderwidth=0)
+            text_widget.configure(yscrollcommand=scrollbar.set)
+            
+            text_widget.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=10)
+            scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+            
+            popup.columnconfigure(0, weight=1)
+            popup.rowconfigure(0, weight=1)
+            
+            # Add header
+            text_widget.insert(tk.END, "💰 EVE Online Bounty Tracking Details\n")
+            text_widget.insert(tk.END, "=" * 80 + "\n\n")
+            
+            # Session info
+            if self.bounty_session_start:
+                session_duration = datetime.now() - self.bounty_session_start
+                hours = int(session_duration.total_seconds() // 3600)
+                minutes = int((session_duration.total_seconds() % 3600) // 60)
+                
+                text_widget.insert(tk.END, f"Session Started: {self.bounty_session_start.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                text_widget.insert(tk.END, f"Session Duration: {hours}h {minutes}m\n")
+                text_widget.insert(tk.END, f"Total Bounties: {len(self.bounty_entries)}\n")
+                text_widget.insert(tk.END, f"Total ISK Earned: {self.total_bounty_isk:,} ISK\n")
+                
+                if session_duration.total_seconds() > 0:
+                    isk_per_hour = (self.total_bounty_isk / session_duration.total_seconds()) * 3600
+                    text_widget.insert(tk.END, f"ISK per Hour: {isk_per_hour:,.0f} ISK/h\n")
+                
+                text_widget.insert(tk.END, "\n" + "=" * 80 + "\n\n")
+            
+            # Individual bounty entries
+            text_widget.insert(tk.END, "Individual Bounty Entries (Newest First):\n")
+            text_widget.insert(tk.END, "-" * 80 + "\n\n")
+            
+            # Sort entries by timestamp (newest first)
+            sorted_entries = sorted(self.bounty_entries, key=lambda x: x['timestamp'], reverse=True)
+            
+            for i, entry in enumerate(sorted_entries, 1):
+                timestamp = entry['timestamp']
+                isk_amount = entry['isk_amount']
+                source_file = entry['source_file']
+                running_total = entry['running_total']
+                
+                text_widget.insert(tk.END, f"{i:2d}. {timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                text_widget.insert(tk.END, f"    Amount: {isk_amount:,} ISK\n")
+                text_widget.insert(tk.END, f"    Source: {source_file}\n")
+                text_widget.insert(tk.END, f"    Running Total: {running_total:,} ISK\n")
+                text_widget.insert(tk.END, "-" * 40 + "\n")
+            
+            # Summary
+            text_widget.insert(tk.END, f"\n📊 Summary:\n")
+            text_widget.insert(tk.END, f"Total Bounties: {len(self.bounty_entries)}\n")
+            text_widget.insert(tk.END, f"Total ISK: {self.total_bounty_isk:,} ISK\n")
+            
+            if self.bounty_entries:
+                avg_bounty = self.total_bounty_isk / len(self.bounty_entries)
+                text_widget.insert(tk.END, f"Average Bounty: {avg_bounty:,.0f} ISK\n")
+                
+                # Largest and smallest bounties
+                largest = max(self.bounty_entries, key=lambda x: x['isk_amount'])
+                smallest = min(self.bounty_entries, key=lambda x: x['isk_amount'])
+                text_widget.insert(tk.END, f"Largest Bounty: {largest['isk_amount']:,} ISK\n")
+                text_widget.insert(tk.END, f"Smallest Bounty: {smallest['isk_amount']:,} ISK\n")
+            
+            # Make text read-only
+            text_widget.config(state=tk.DISABLED)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Error showing bounty details: {str(e)}")
+    
+    def update_bounty_display(self):
+        """Update the bounty display labels with current information"""
+        try:
+            # Update total ISK
+            self.bounty_total_var.set(f"Total ISK Earned: {self.total_bounty_isk:,} ISK")
+            
+            # Update bounty count
+            self.bounty_count_var.set(f"Bounties: {len(self.bounty_entries)}")
+            
+            # Update session info
+            if self.bounty_session_start:
+                session_duration = datetime.now() - self.bounty_session_start
+                hours = int(session_duration.total_seconds() // 3600)
+                minutes = int((session_duration.total_seconds() % 3600) // 60)
+                self.bounty_session_var.set(f"Session: {hours}h {minutes}m")
+            else:
+                self.bounty_session_var.set("Session: Not started")
+                
+        except Exception as e:
+            print(f"Error updating bounty display: {e}")
+
+    def export_bounties(self):
+        """Export bounty tracking data to a file"""
+        try:
+            # Ask for save location
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+                title="Save Bounty Tracking As"
+            )
+            
+            if file_path:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(f"EVE Online Bounty Tracking - Exported on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"Session Start: {self.bounty_session_start.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"Total Bounties: {len(self.bounty_entries)}\n")
+                    f.write(f"Total ISK Earned: {self.total_bounty_isk:,} ISK\n")
+                    f.write("=" * 80 + "\n\n")
+                    
+                    # Sort entries by timestamp (newest first)
+                    sorted_entries = sorted(self.bounty_entries, key=lambda x: x['timestamp'], reverse=True)
+                    
+                    for i, entry in enumerate(sorted_entries, 1):
+                        timestamp = entry['timestamp']
+                        isk_amount = entry['isk_amount']
+                        source_file = entry['source_file']
+                        running_total = entry['running_total']
+                        
+                        f.write(f"{i:2d}. {timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                        f.write(f"    Amount: {isk_amount:,} ISK\n")
+                        f.write(f"    Source: {source_file}\n")
+                        f.write(f"    Running Total: {running_total:,} ISK\n")
+                        f.write("-" * 40 + "\n")
+                
+                self.status_var.set(f"Bounty tracking exported to {os.path.basename(file_path)}")
+                messagebox.showinfo("Export Complete", f"Bounty tracking exported successfully to:\n{file_path}")
+                
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Error exporting bounties: {str(e)}")
             self.status_var.set(f"Export error: {str(e)}")
 
 def main():
