@@ -1,4 +1,14 @@
-tkinter
-datetime
-os
-pathlib
+# EVE Log Reader - Build Dependencies
+# Only includes packages that need to be installed via pip
+
+# Core build tool
+pyinstaller>=5.0.0
+
+# Optional: UPX compression for smaller executables
+# upx-ucl>=4.0.0
+
+# Optional: For code signing (if you have a certificate)
+# pywin32>=305
+
+# Note: tkinter, datetime, os, pathlib, threading, hashlib, glob, re, time
+# are built-in Python modules and don't need to be installed
