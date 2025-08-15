@@ -1061,7 +1061,7 @@ class EVELogReader:
         else:
             messagebox.showwarning("Test Warning", "No link process started. Start a link first.")
     
-   def end_crab_failed(self):
+    def end_crab_failed(self):
         """End CRAB session as failed - clear countdown and mark as failed"""
         if not self.concord_link_start:
             messagebox.showwarning("End CRAB Failed", "No CRAB session is currently running.")
@@ -1077,7 +1077,7 @@ class EVELogReader:
         
         if result:
             # Stop the countdown
-            self.stop_concord_countdown = False
+            self.stop_concord_countdown = True
             if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
                 self.concord_countdown_thread.join(timeout=1)
             
@@ -1091,8 +1091,8 @@ class EVELogReader:
             # End CRAB session
             self.end_crab_session()
             
-            # Update CRAB display manually (don't call update_concord_display)
-            self.update_crab_bounty_display()
+            # Update display
+            self.update_concord_display()
             print("❌ CRAB session ended as failed")
     
     def end_crab_submit(self):
@@ -1122,11 +1122,8 @@ class EVELogReader:
             completion_time = datetime.now()
             self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {completion_time.strftime('%H:%M:%S')}")
             
-            # End CRAB session
-            self.end_crab_session()
-            
-            # Update CRAB display manually (don't call update_concord_display)
-            self.update_crab_bounty_display()
+            # Update display
+            self.update_concord_display()
             print("✅ CRAB session completed and data ready for submission")
     
     def add_bounty_entry(self, timestamp, isk_amount, source_file):
