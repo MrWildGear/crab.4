@@ -43,6 +43,11 @@ class EVELogReader:
         self.stop_concord_countdown = False  # Flag to stop countdown
         self.concord_countdown_color = "#ffff00"  # Default yellow color for countdown
         
+        # CRAB-specific bounty tracking system
+        self.crab_bounty_entries = []  # Store bounty entries during CRAB sessions
+        self.crab_total_bounty_isk = 0  # Total ISK earned during CRAB sessions
+        self.crab_session_active = False  # Whether a CRAB session is currently active
+        
         # Settings for recent file filtering
         self.max_days_old = 1  # Only show logs from last 24 hours by default
         self.max_files_to_show = 10  # Maximum number of recent files to display
@@ -319,8 +324,52 @@ class EVELogReader:
                                     font=("Segoe UI", 9))
         end_concord_btn.grid(row=0, column=6, padx=(20, 0))
         
+        # CRAB Bounty Tracking display
+        crab_bounty_frame = ttk.LabelFrame(main_frame, text="🦀 CRAB Bounty Tracking", padding="5")
+        crab_bounty_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        # CRAB bounty info labels
+        self.crab_bounty_total_var = tk.StringVar(value="CRAB Total ISK: 0 ISK")
+        crab_bounty_total_label = ttk.Label(crab_bounty_frame, textvariable=self.crab_bounty_total_var, 
+                                           font=("Segoe UI", 10, "bold"))
+        crab_bounty_total_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 20))
+        
+        self.crab_bounty_count_var = tk.StringVar(value="CRAB Bounties: 0")
+        crab_bounty_count_label = ttk.Label(crab_bounty_frame, textvariable=self.crab_bounty_count_var)
+        crab_bounty_count_label.grid(row=0, column=1, sticky=tk.W, padx=(0, 20))
+        
+        self.crab_session_var = tk.StringVar(value="CRAB Session: Inactive")
+        crab_session_label = ttk.Label(crab_bounty_frame, textvariable=self.crab_session_var)
+        crab_session_label.grid(row=0, column=2, sticky=tk.W, padx=(0, 20))
+        
+        # CRAB bounty control buttons
+        reset_crab_bounty_btn = tk.Button(crab_bounty_frame, text="Reset CRAB Bounties", command=self.reset_crab_bounty_tracking,
+                                         bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                         activebackground="#404040",   # Darker when clicked
+                                         activeforeground="#ffffff",  # White text when clicked
+                                         relief="raised", borderwidth=1,
+                                         font=("Segoe UI", 9))
+        reset_crab_bounty_btn.grid(row=0, column=3, padx=(20, 0))
+        
+        show_crab_bounties_btn = tk.Button(crab_bounty_frame, text="Show CRAB Details", command=self.show_crab_bounty_details,
+                                          bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                          activebackground="#404040",   # Darker when clicked
+                                          activeforeground="#ffffff",  # White text when clicked
+                                          relief="raised", borderwidth=1,
+                                          font=("Segoe UI", 9))
+        show_crab_bounties_btn.grid(row=0, column=4, padx=(20, 0))
+        
+        # Add CRAB bounty button for testing
+        add_crab_bounty_btn = tk.Button(crab_bounty_frame, text="Add CRAB Bounty", command=self.add_test_crab_bounty,
+                                       bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                       activebackground="#404040",   # Darker when clicked
+                                       activeforeground="#ffffff",  # White text when clicked
+                                       relief="raised", borderwidth=1,
+                                       font=("Segoe UI", 9))
+        add_crab_bounty_btn.grid(row=0, column=5, padx=(20, 0))
+        
         status_frame = ttk.Frame(main_frame)
-        status_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        status_frame.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         # Create text widget with scrollbar for combined logs
         self.text_widget = tk.Text(status_frame, wrap=tk.WORD, height=25,
@@ -344,7 +393,7 @@ class EVELogReader:
         # Status bar
         self.status_var = tk.StringVar(value="Ready - Monitoring recent log files only")
         status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN)
-        status_bar.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
+        status_bar.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
         
         # Apply dark styling to status bar
         style = ttk.Style()
@@ -358,7 +407,7 @@ class EVELogReader:
         
         # Control buttons
         control_frame = ttk.Frame(main_frame)
-        control_frame.grid(row=8, column=0, columnspan=2, pady=(10, 0))
+        control_frame.grid(row=9, column=0, columnspan=2, pady=(10, 0))
         
         # High-frequency monitoring checkbox
         self.high_freq_var = tk.BooleanVar(value=True)
@@ -604,6 +653,10 @@ class EVELogReader:
                                 if not bounty_exists:
                                     print(f"💰 Processing bounty: {bounty_amount:,} ISK from {source_file}")
                                     self.add_bounty_entry(timestamp, bounty_amount, source_file)
+                                    
+                                    # Also track in CRAB if session is active
+                                    if self.crab_session_active:
+                                        self.add_crab_bounty_entry(timestamp, bounty_amount, source_file)
                                 else:
                                     print(f"🔄 Skipping duplicate bounty: {bounty_amount:,} ISK from {source_file}")
                             
@@ -614,6 +667,8 @@ class EVELogReader:
                                 self.concord_status_var.set("Status: Linking")
                                 self.concord_countdown_active = True
                                 self.start_concord_countdown()
+                                # Start CRAB bounty tracking session
+                                self.start_crab_session()
                             elif concord_message_type == "link_complete":
                                 self.concord_link_completed = True
                                 self.concord_status_var.set("Status: Active")
@@ -622,6 +677,7 @@ class EVELogReader:
                                 # self.stop_concord_countdown = True
                                 self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {datetime.now().strftime('%H:%M:%S')}")
                                 self.update_concord_display()
+                                # CRAB session status will be updated by update_concord_display()
                             
                             self.all_log_entries.append((timestamp, line, source_file))
                         
@@ -667,6 +723,10 @@ class EVELogReader:
             # Add bounty information to status
             if self.bounty_entries:
                 status_text += f" | 💰 Bounties: {len(self.bounty_entries)} ({self.total_bounty_isk:,} ISK)"
+            
+            # Add CRAB bounty information to status
+            if self.crab_session_active:
+                status_text += f" | 🦀 CRAB: {len(self.crab_bounty_entries)} ({self.crab_total_bounty_isk:,} ISK)"
             
             # Add CONCORD information to status
             if self.concord_countdown_active and not self.concord_link_completed:
@@ -930,6 +990,9 @@ class EVELogReader:
         else:
             self.concord_status_var.set("Status: Inactive")
             self.concord_countdown_var.set("Countdown: --:--")
+        
+        # Update CRAB session status to match CONCORD status
+        self.update_crab_session_status()
     
     def reset_concord_tracking(self):
         """Reset CONCORD tracking to start fresh"""
@@ -956,6 +1019,9 @@ class EVELogReader:
         self.concord_countdown_active = False
         self.stop_concord_countdown = False
         
+        # Reset CRAB tracking
+        self.reset_crab_bounty_tracking()
+        
         # Update display
         self.update_concord_display()
         print("🔄 CONCORD tracking reset")
@@ -968,6 +1034,8 @@ class EVELogReader:
         self.concord_countdown_active = True
         self.start_concord_countdown()
         self.concord_time_var.set(f"Link Time: Started at {self.concord_link_start.strftime('%H:%M:%S')}")
+        # Update displays to sync CRAB session status
+        self.update_concord_display()
     
     def test_concord_link_complete(self):
         """Test function to simulate CONCORD link completion message"""
@@ -981,6 +1049,7 @@ class EVELogReader:
             completion_time = datetime.now()
             self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {completion_time.strftime('%H:%M:%S')}")
             self.update_concord_display()
+            # CRAB session status will be updated by update_concord_display()
         else:
             messagebox.showwarning("Test Warning", "No link process started. Start a link first.")
     
@@ -1533,6 +1602,207 @@ class EVELogReader:
         except Exception as e:
             messagebox.showerror("Export Error", f"Error exporting bounties: {str(e)}")
             self.status_var.set(f"Export error: {str(e)}")
+    
+    # CRAB Bounty Tracking Functions
+    def add_crab_bounty_entry(self, timestamp, isk_amount, source_file):
+        """Add a new bounty entry to the CRAB tracking system"""
+        if not self.crab_session_active:
+            print("⚠️ CRAB session not active - bounty not tracked")
+            return
+        
+        bounty_entry = {
+            'timestamp': timestamp,
+            'isk_amount': isk_amount,
+            'source_file': source_file,
+            'running_total': self.crab_total_bounty_isk + isk_amount
+        }
+        
+        self.crab_bounty_entries.append(bounty_entry)
+        self.crab_total_bounty_isk += isk_amount
+        
+        print(f"🦀 CRAB bounty tracked: {isk_amount:,} ISK (CRAB Total: {self.crab_total_bounty_isk:,} ISK)")
+        self.update_crab_bounty_display()
+    
+    def reset_crab_bounty_tracking(self):
+        """Reset CRAB bounty tracking to start fresh"""
+        if self.crab_bounty_entries:
+            # Ask for confirmation
+            result = messagebox.askyesno(
+                "Reset CRAB Bounty Tracking", 
+                f"Are you sure you want to reset CRAB bounty tracking?\n\n"
+                f"This will clear {len(self.crab_bounty_entries)} CRAB bounty entries "
+                f"and {self.crab_total_bounty_isk:,} ISK in tracked earnings.\n\n"
+                f"This action cannot be undone."
+            )
+            
+            if not result:
+                return
+        
+        self.crab_bounty_entries = []
+        self.crab_total_bounty_isk = 0
+        self.update_crab_bounty_display()
+        print("🔄 CRAB bounty tracking reset")
+    
+    def show_crab_bounty_details(self):
+        """Show detailed CRAB bounty information in a popup window"""
+        try:
+            if not self.crab_bounty_entries:
+                messagebox.showinfo("CRAB Bounty Details", "No CRAB bounties tracked yet.")
+                return
+            
+            # Create popup window
+            popup = tk.Toplevel(self.root)
+            popup.title("🦀 CRAB Bounty Details")
+            popup.geometry("800x600")
+            popup.transient(self.root)
+            popup.grab_set()
+            popup.configure(bg="#2b2b2b")  # Dark background
+            
+            # Create text widget
+            text_widget = tk.Text(popup, wrap=tk.WORD, font=("Consolas", 10),
+                                 bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                 insertbackground="#ffffff",   # White cursor
+                                 selectbackground="#4a9eff",  # Blue selection
+                                 selectforeground="#ffffff")  # White text when selected
+            scrollbar = tk.Scrollbar(popup, orient=tk.VERTICAL, command=text_widget.yview,
+                                    bg="#1e1e1e", troughcolor="#2b2b2b",  # Dark scrollbar
+                                    activebackground="#404040",            # Darker when active
+                                    relief="flat", borderwidth=0)
+            text_widget.configure(yscrollcommand=scrollbar.set)
+            
+            text_widget.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=10)
+            scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+            
+            popup.columnconfigure(0, weight=1)
+            popup.rowconfigure(0, weight=1)
+            
+            # Add header
+            text_widget.insert(tk.END, "🦀 CRAB Bounty Tracking Details\n")
+            text_widget.insert(tk.END, "=" * 80 + "\n\n")
+            
+            # Session info
+            if self.concord_link_start:
+                text_widget.insert(tk.END, f"CRAB Session Started: {self.concord_link_start.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                if self.concord_link_completed:
+                    completion_time = datetime.now()
+                    session_duration = completion_time - self.concord_link_start
+                    hours = int(session_duration.total_seconds() // 3600)
+                    minutes = int((session_duration.total_seconds() % 3600) // 60)
+                    text_widget.insert(tk.END, f"CRAB Session Duration: {hours}h {minutes}m\n")
+                else:
+                    text_widget.insert(tk.END, "CRAB Session Status: Active\n")
+                
+                text_widget.insert(tk.END, f"Total CRAB Bounties: {len(self.crab_bounty_entries)}\n")
+                text_widget.insert(tk.END, f"Total CRAB ISK Earned: {self.crab_total_bounty_isk:,} ISK\n")
+                
+                if self.crab_bounty_entries:
+                    # Calculate ISK per hour if session completed
+                    if self.concord_link_completed:
+                        session_duration = completion_time - self.concord_link_start
+                        if session_duration.total_seconds() > 0:
+                            isk_per_hour = (self.crab_total_bounty_isk / session_duration.total_seconds()) * 3600
+                            text_widget.insert(tk.END, f"CRAB ISK per Hour: {isk_per_hour:,.0f} ISK/h\n")
+                
+                text_widget.insert(tk.END, "\n" + "=" * 80 + "\n\n")
+            
+            # Individual bounty entries
+            text_widget.insert(tk.END, "Individual CRAB Bounty Entries (Newest First):\n")
+            text_widget.insert(tk.END, "-" * 80 + "\n\n")
+            
+            # Sort entries by timestamp (newest first)
+            sorted_entries = sorted(self.crab_bounty_entries, key=lambda x: x['timestamp'], reverse=True)
+            
+            for i, entry in enumerate(sorted_entries, 1):
+                timestamp = entry['timestamp']
+                isk_amount = entry['isk_amount']
+                source_file = entry['source_file']
+                running_total = entry['running_total']
+                
+                text_widget.insert(tk.END, f"{i:2d}. {timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                text_widget.insert(tk.END, f"    Amount: {isk_amount:,} ISK\n")
+                text_widget.insert(tk.END, f"    Source: {source_file}\n")
+                text_widget.insert(tk.END, f"    Running Total: {running_total:,} ISK\n")
+                text_widget.insert(tk.END, "-" * 40 + "\n")
+            
+            # Summary
+            text_widget.insert(tk.END, f"\n📊 CRAB Summary:\n")
+            text_widget.insert(tk.END, f"Total CRAB Bounties: {len(self.crab_bounty_entries)}\n")
+            text_widget.insert(tk.END, f"Total CRAB ISK: {self.crab_total_bounty_isk:,} ISK\n")
+            
+            if self.crab_bounty_entries:
+                avg_bounty = self.crab_total_bounty_isk / len(self.crab_bounty_entries)
+                text_widget.insert(tk.END, f"Average CRAB Bounty: {avg_bounty:,.0f} ISK\n")
+                
+                # Largest and smallest bounties
+                largest = max(self.crab_bounty_entries, key=lambda x: x['isk_amount'])
+                smallest = min(self.crab_bounty_entries, key=lambda x: x['isk_amount'])
+                text_widget.insert(tk.END, f"Largest CRAB Bounty: {largest['isk_amount']:,} ISK\n")
+                text_widget.insert(tk.END, f"Smallest CRAB Bounty: {smallest['isk_amount']:,} ISK\n")
+            
+            # Make text read-only
+            text_widget.config(state=tk.DISABLED)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Error showing CRAB bounty details: {str(e)}")
+    
+    def update_crab_bounty_display(self):
+        """Update the CRAB bounty display labels with current information"""
+        try:
+            # Update total ISK
+            self.crab_bounty_total_var.set(f"CRAB Total ISK: {self.crab_total_bounty_isk:,} ISK")
+            
+            # Update bounty count
+            self.crab_bounty_count_var.set(f"CRAB Bounties: {len(self.crab_bounty_entries)}")
+            
+            # Update session info
+            if self.crab_session_active:
+                self.crab_session_var.set("CRAB Session: Active")
+            else:
+                self.crab_session_var.set("CRAB Session: Inactive")
+                
+        except Exception as e:
+            print(f"Error updating CRAB bounty display: {e}")
+    
+    def add_test_crab_bounty(self):
+        """Test function to add a CRAB bounty for testing"""
+        if not self.crab_session_active:
+            messagebox.showwarning("CRAB Session Required", "CRAB session must be active to add bounties.\n\nStart a CONCORD link first.")
+            return
+        
+        # Create a test bounty entry
+        test_timestamp = datetime.now()
+        test_isk = 50000  # 50k ISK test bounty
+        
+        self.add_crab_bounty_entry(test_timestamp, test_isk, "TEST_CRAB_BOUNTY")
+        print(f"🧪 Test CRAB bounty added: {test_isk:,} ISK")
+    
+    def start_crab_session(self):
+        """Start a CRAB bounty tracking session"""
+        self.crab_session_active = True
+        self.update_crab_bounty_display()
+        print("🦀 CRAB bounty tracking session started")
+    
+    def end_crab_session(self):
+        """End the CRAB bounty tracking session"""
+        self.crab_session_active = False
+        self.update_crab_bounty_display()
+        print("🦀 CRAB bounty tracking session ended")
+    
+    def update_crab_session_status(self):
+        """Update CRAB session status to match CONCORD status"""
+        if self.concord_link_start:
+            if self.concord_link_completed:
+                # CONCORD is Active, so CRAB should also be Active
+                self.crab_session_active = True
+                self.crab_session_var.set("CRAB Session: Active")
+            else:
+                # CONCORD is Linking, so CRAB should also be Linking
+                self.crab_session_active = True
+                self.crab_session_var.set("CRAB Session: Linking")
+        else:
+            # No CONCORD link, CRAB is inactive
+            self.crab_session_active = False
+            self.crab_session_var.set("CRAB Session: Inactive")
 
 def main():
     root = tk.Tk()
