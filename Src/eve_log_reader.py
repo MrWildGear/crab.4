@@ -35,6 +35,14 @@ class EVELogReader:
         self.total_bounty_isk = 0  # Total ISK earned from bounties
         self.bounty_session_start = None  # When bounty tracking started
         
+        # CONCORD Rogue Analysis Beacon tracking system
+        self.concord_link_start = None  # When the link process started
+        self.concord_link_completed = False  # Whether the link process completed
+        self.concord_countdown_active = False  # Whether countdown is active
+        self.concord_countdown_thread = None  # Thread for countdown timer
+        self.stop_concord_countdown = False  # Flag to stop countdown
+        self.concord_countdown_color = "#ffff00"  # Default yellow color for countdown
+        
         # Settings for recent file filtering
         self.max_days_old = 1  # Only show logs from last 24 hours by default
         self.max_files_to_show = 10  # Maximum number of recent files to display
@@ -257,8 +265,62 @@ class EVELogReader:
                                      font=("Segoe UI", 9))
         show_bounties_btn.grid(row=0, column=4, padx=(20, 0))
         
+        # CONCORD Rogue Analysis Beacon tracking display
+        concord_frame = ttk.LabelFrame(main_frame, text="🔗 CONCORD Rogue Analysis Beacon", padding="5")
+        concord_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        # CONCORD status labels
+        self.concord_status_var = tk.StringVar(value="Status: Inactive")
+        concord_status_label = ttk.Label(concord_frame, textvariable=self.concord_status_var, 
+                                        font=("Segoe UI", 10, "bold"))
+        concord_status_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 20))
+        
+        self.concord_countdown_var = tk.StringVar(value="Countdown: --:--")
+        self.concord_countdown_label = ttk.Label(concord_frame, textvariable=self.concord_countdown_var,
+                                                font=("Consolas", 10, "bold"), foreground=self.concord_countdown_color)
+        self.concord_countdown_label.grid(row=0, column=1, sticky=tk.W, padx=(0, 20))
+        
+        self.concord_time_var = tk.StringVar(value="Link Time: Not started")
+        concord_time_label = ttk.Label(concord_frame, textvariable=self.concord_time_var)
+        concord_time_label.grid(row=0, column=2, sticky=tk.W, padx=(0, 20))
+        
+        # CONCORD control buttons
+        reset_concord_btn = tk.Button(concord_frame, text="Reset CONCORD Tracking", command=self.reset_concord_tracking,
+                                     bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                     activebackground="#404040",   # Darker when clicked
+                                     activeforeground="#ffffff",  # White text when clicked
+                                     relief="raised", borderwidth=1,
+                                     font=("Segoe UI", 9))
+        reset_concord_btn.grid(row=0, column=3, padx=(20, 0))
+        
+        # Test buttons for CONCORD messages
+        test_link_start_btn = tk.Button(concord_frame, text="Test Link Start", command=self.test_concord_link_start,
+                                       bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                       activebackground="#404040",   # Darker when clicked
+                                       activeforeground="#ffffff",  # White text when clicked
+                                       relief="raised", borderwidth=1,
+                                       font=("Segoe UI", 9))
+        test_link_start_btn.grid(row=0, column=4, padx=(20, 0))
+        
+        test_link_complete_btn = tk.Button(concord_frame, text="Test Link Complete", command=self.test_concord_link_complete,
+                                           bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                           activebackground="#404040",   # Darker when clicked
+                                           activeforeground="#ffffff",  # White text when clicked
+                                           relief="raised", borderwidth=1,
+                                           font=("Segoe UI", 9))
+        test_link_complete_btn.grid(row=0, column=5, padx=(20, 0))
+        
+        # End CONCORD process button
+        end_concord_btn = tk.Button(concord_frame, text="End Process", command=self.end_concord_process,
+                                    bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                    activebackground="#404040",   # Darker when clicked
+                                    activeforeground="#ffffff",  # White text when clicked
+                                    relief="raised", borderwidth=1,
+                                    font=("Segoe UI", 9))
+        end_concord_btn.grid(row=0, column=6, padx=(20, 0))
+        
         status_frame = ttk.Frame(main_frame)
-        status_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        status_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         # Create text widget with scrollbar for combined logs
         self.text_widget = tk.Text(status_frame, wrap=tk.WORD, height=25,
@@ -282,7 +344,7 @@ class EVELogReader:
         # Status bar
         self.status_var = tk.StringVar(value="Ready - Monitoring recent log files only")
         status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN)
-        status_bar.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
+        status_bar.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
         
         # Apply dark styling to status bar
         style = ttk.Style()
@@ -296,7 +358,7 @@ class EVELogReader:
         
         # Control buttons
         control_frame = ttk.Frame(main_frame)
-        control_frame.grid(row=7, column=0, columnspan=2, pady=(10, 0))
+        control_frame.grid(row=8, column=0, columnspan=2, pady=(10, 0))
         
         # High-frequency monitoring checkbox
         self.high_freq_var = tk.BooleanVar(value=True)
@@ -545,6 +607,22 @@ class EVELogReader:
                                 else:
                                     print(f"🔄 Skipping duplicate bounty: {bounty_amount:,} ISK from {source_file}")
                             
+                            # Check for CONCORD link messages
+                            concord_message_type = self.detect_concord_message(line)
+                            if concord_message_type == "link_start":
+                                self.concord_link_start = datetime.now()
+                                self.concord_status_var.set("Status: Linking")
+                                self.concord_countdown_active = True
+                                self.start_concord_countdown()
+                            elif concord_message_type == "link_complete":
+                                self.concord_link_completed = True
+                                self.concord_status_var.set("Status: Active")
+                                # Don't stop the countdown - let it continue to show total elapsed time
+                                # self.concord_countdown_active = False
+                                # self.stop_concord_countdown = True
+                                self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {datetime.now().strftime('%H:%M:%S')}")
+                                self.update_concord_display()
+                            
                             self.all_log_entries.append((timestamp, line, source_file))
                         
                         total_lines += len(lines)
@@ -590,10 +668,19 @@ class EVELogReader:
             if self.bounty_entries:
                 status_text += f" | 💰 Bounties: {len(self.bounty_entries)} ({self.total_bounty_isk:,} ISK)"
             
+            # Add CONCORD information to status
+            if self.concord_countdown_active and not self.concord_link_completed:
+                status_text += " | 🔗 CONCORD: Linking"
+            elif self.concord_link_completed:
+                status_text += " | 🔗 CONCORD: Active"
+            
             self.status_var.set(status_text)
             
             # Update bounty display
             self.update_bounty_display()
+            
+            # Update CONCORD display
+            self.update_concord_display()
             
             # Scan for any bounties that might have been missed
             self.scan_existing_bounties()
@@ -755,6 +842,170 @@ class EVELogReader:
         
         return None
     
+    def detect_concord_message(self, line):
+        """Detect CONCORD Rogue Analysis Beacon messages"""
+        # Pattern for link start message
+        link_start_pattern = r'Your ship has started the link process with CONCORD Rogue Analysis Beacon'
+        
+        # Pattern for link completion message
+        link_complete_pattern = r'Your ship successfully completed the link process with CONCORD Rogue Analysis Beacon'
+        
+        if re.search(link_start_pattern, line, re.IGNORECASE):
+            print("🔗 CONCORD link process started detected")
+            return "link_start"
+        elif re.search(link_complete_pattern, line, re.IGNORECASE):
+            print("✅ CONCORD link process completed detected")
+            return "link_complete"
+        
+        return None
+    
+    def start_concord_countdown(self):
+        """Start the 60-minute countdown timer for CONCORD link"""
+        if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
+            return  # Already running
+        
+        self.stop_concord_countdown = False
+        self.concord_countdown_thread = threading.Thread(target=self.concord_countdown_loop, daemon=True)
+        self.concord_countdown_thread.start()
+        print("🔗 CONCORD countdown timer started")
+    
+    def concord_countdown_loop(self):
+        """Countdown loop for CONCORD link process"""
+        start_time = datetime.now()
+        target_time = start_time + timedelta(minutes=60)
+        
+        while not self.stop_concord_countdown:
+            current_time = datetime.now()
+            
+            if self.concord_link_completed:
+                # Link completed - show countdown format but in green
+                remaining = target_time - current_time
+                minutes = int(remaining.total_seconds() // 60)
+                seconds = int(remaining.total_seconds() % 60)
+                countdown_text = f"Countdown: {minutes:02d}:{seconds:02d}"
+                color = "#00ff00"  # Green for completed
+            else:
+                # Link still active - show countdown
+                remaining = target_time - current_time
+                
+                if remaining.total_seconds() <= 0:
+                    # Time's up!
+                    self.root.after(0, self.concord_countdown_expired)
+                    break
+                
+                # Update countdown display
+                minutes = int(remaining.total_seconds() // 60)
+                seconds = int(remaining.total_seconds() % 60)
+                countdown_text = f"Countdown: {minutes:02d}:{seconds:02d}"
+                
+                # Always yellow while linking (until completion)
+                color = "#ffff00"  # Yellow while linking
+            
+            self.root.after(0, lambda: self.update_concord_countdown(countdown_text, color))
+            
+            time.sleep(1)  # Update every second
+    
+    def update_concord_countdown(self, text, color):
+        """Update the countdown display with new text and color"""
+        self.concord_countdown_var.set(text)
+        # Update the countdown label color
+        self.concord_countdown_color = color
+        self.concord_countdown_label.configure(foreground=color)
+    
+    def concord_countdown_expired(self):
+        """Handle countdown expiration"""
+        self.concord_status_var.set("Status: EXPIRED (Linking)")
+        self.concord_countdown_var.set("Countdown: EXPIRED")
+        self.concord_countdown_active = False
+        print("⚠️ CONCORD link countdown expired!")
+    
+    def update_concord_display(self):
+        """Update the CONCORD display with current status"""
+        if self.concord_link_start:
+            if self.concord_link_completed:
+                self.concord_status_var.set("Status: Active")
+                # Don't change countdown text here - let the countdown loop handle it
+            else:
+                self.concord_status_var.set("Status: Linking")
+        else:
+            self.concord_status_var.set("Status: Inactive")
+            self.concord_countdown_var.set("Countdown: --:--")
+    
+    def reset_concord_tracking(self):
+        """Reset CONCORD tracking to start fresh"""
+        if self.concord_countdown_active:
+            # Ask for confirmation
+            result = messagebox.askyesno(
+                "Reset CONCORD Tracking", 
+                "Are you sure you want to reset CONCORD tracking?\n\n"
+                "This will stop the current countdown and clear all tracking data.\n\n"
+                "This action cannot be undone."
+            )
+            
+            if not result:
+                return
+        
+        # Stop countdown if running
+        self.stop_concord_countdown = True
+        if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
+            self.concord_countdown_thread.join(timeout=1)
+        
+        # Reset all variables
+        self.concord_link_start = None
+        self.concord_link_completed = False
+        self.concord_countdown_active = False
+        self.stop_concord_countdown = False
+        
+        # Update display
+        self.update_concord_display()
+        print("🔄 CONCORD tracking reset")
+    
+    def test_concord_link_start(self):
+        """Test function to simulate CONCORD link start message"""
+        print("🧪 Testing CONCORD link start...")
+        self.concord_link_start = datetime.now()
+        self.concord_status_var.set("Status: Linking")
+        self.concord_countdown_active = True
+        self.start_concord_countdown()
+        self.concord_time_var.set(f"Link Time: Started at {self.concord_link_start.strftime('%H:%M:%S')}")
+    
+    def test_concord_link_complete(self):
+        """Test function to simulate CONCORD link completion message"""
+        print("🧪 Testing CONCORD link completion...")
+        if self.concord_link_start:
+            self.concord_link_completed = True
+            self.concord_status_var.set("Status: Active")
+            # Don't stop the countdown - let it continue to show elapsed time
+            # self.concord_countdown_active = False
+            # self.stop_concord_countdown = True
+            completion_time = datetime.now()
+            self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {completion_time.strftime('%H:%M:%S')}")
+            self.update_concord_display()
+        else:
+            messagebox.showwarning("Test Warning", "No link process started. Start a link first.")
+    
+    def end_concord_process(self):
+        """End the CONCORD process manually"""
+        if not self.concord_link_start:
+            messagebox.showwarning("End Process", "No CONCORD process is currently running.")
+            return
+        
+        # Ask for confirmation
+        result = messagebox.askyesno(
+            "End CONCORD Process", 
+            "Are you sure you want to end the CONCORD process?\n\n"
+            "This will mark the process as completed and change the status to 'Completed'.\n\n"
+            "This action cannot be undone."
+        )
+        
+        if result:
+            self.concord_link_completed = True
+            self.concord_status_var.set("Status: Completed")
+            completion_time = datetime.now()
+            self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {completion_time.strftime('%H:%M:%S')}")
+            self.update_concord_display()
+            print("✅ CONCORD process manually ended")
+    
     def add_bounty_entry(self, timestamp, isk_amount, source_file):
         """Add a new bounty entry to the tracking system"""
         if self.bounty_session_start is None:
@@ -896,6 +1147,12 @@ class EVELogReader:
                 status_text += " | High-freq: ON"
             else:
                 status_text += " | High-freq: OFF"
+            
+            # Add CONCORD status
+            if self.concord_countdown_active and not self.concord_link_completed:
+                status_text += " | 🔗 CONCORD: Linking"
+            elif self.concord_link_completed:
+                status_text += " | 🔗 CONCORD: Active"
             
             self.status_var.set(status_text)
     
