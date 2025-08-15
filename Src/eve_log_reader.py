@@ -257,6 +257,33 @@ class EVELogReader:
                                      font=("Segoe UI", 9))
         show_bounties_btn.grid(row=0, column=4, padx=(20, 0))
         
+        # Manual bounty scan button
+        scan_bounties_btn = tk.Button(bounty_frame, text="Scan for Bounties", command=self.scan_existing_bounties,
+                                     bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                     activebackground="#404040",   # Darker when clicked
+                                     activeforeground="#ffffff",  # White text when clicked
+                                     relief="raised", borderwidth=1,
+                                     font=("Segoe UI", 9))
+        scan_bounties_btn.grid(row=0, column=5, padx=(20, 0))
+        
+        # Test bounty button
+        test_bounty_btn = tk.Button(bounty_frame, text="Add Test Bounty", command=self.add_test_bounty,
+                                   bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                   activebackground="#404040",   # Darker when clicked
+                                   activeforeground="#ffffff",  # White text when clicked
+                                   relief="raised", borderwidth=1,
+                                   font=("Segoe UI", 9))
+        test_bounty_btn.grid(row=0, column=6, padx=(20, 0))
+        
+        # Test bounty detection button
+        test_detection_btn = tk.Button(bounty_frame, text="Test Detection", command=self.test_bounty_detection,
+                                      bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                      activebackground="#404040",   # Darker when clicked
+                                      activeforeground="#ffffff",  # White text when clicked
+                                      relief="raised", borderwidth=1,
+                                      font=("Segoe UI", 9))
+        test_detection_btn.grid(row=0, column=7, padx=(20, 0))
+        
         status_frame = ttk.Frame(main_frame)
         status_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
@@ -446,6 +473,36 @@ class EVELogReader:
         except Exception as e:
             self.status_var.set(f"Error loading files: {str(e)}")
     
+    def scan_existing_bounties(self):
+        """Scan existing log entries for bounty entries that may have been missed"""
+        try:
+            print("🔍 Scanning existing log entries for bounties...")
+            bounty_count = 0
+            
+            for timestamp, line, source_file in self.all_log_entries:
+                bounty_amount = self.extract_bounty(line)
+                if bounty_amount and timestamp:
+                    # Check if this bounty is already tracked
+                    bounty_exists = any(
+                        entry['timestamp'] == timestamp and 
+                        entry['isk_amount'] == bounty_amount and 
+                        entry['source_file'] == source_file
+                        for entry in self.bounty_entries
+                    )
+                    
+                    if not bounty_exists:
+                        self.add_bounty_entry(timestamp, bounty_amount, source_file)
+                        bounty_count += 1
+            
+            if bounty_count > 0:
+                print(f"💰 Found {bounty_count} additional bounties in existing logs")
+                self.update_bounty_display()
+            else:
+                print("  No additional bounties found in existing logs")
+                
+        except Exception as e:
+            print(f"Error scanning existing bounties: {e}")
+    
     def refresh_recent_logs(self):
         """Refresh and combine only recent log files"""
         try:
@@ -501,6 +558,7 @@ class EVELogReader:
                             # Check for bounty entries
                             bounty_amount = self.extract_bounty(line)
                             if bounty_amount and timestamp:
+                                print(f"💰 Processing bounty: {bounty_amount:,} ISK from {source_file}")
                                 self.add_bounty_entry(timestamp, bounty_amount, source_file)
                             
                             self.all_log_entries.append((timestamp, line, source_file))
@@ -552,6 +610,9 @@ class EVELogReader:
             
             # Update bounty display
             self.update_bounty_display()
+            
+            # Scan for any bounties that might have been missed
+            self.scan_existing_bounties()
             
         except Exception as e:
             self.status_var.set(f"Error refreshing logs: {str(e)}")
@@ -660,6 +721,7 @@ class EVELogReader:
         """Extract timestamp from log line"""
         # Common EVE log timestamp patterns
         patterns = [
+            r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]',  # [YYYY-MM-DD HH:MM:SS] (exported format)
             r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})',  # YYYY-MM-DD HH:MM:SS
             r'(\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})',  # MM/DD/YYYY HH:MM:SS
             r'(\d{2}:\d{2}:\d{2})',  # HH:MM:SS
@@ -688,16 +750,24 @@ class EVELogReader:
     def extract_bounty(self, line):
         """Extract bounty information from log line"""
         # Pattern for bounty entries: (bounty) <font size=12><b><color=0xff00aa00>AMOUNT ISK</color> added to next bounty payout
-        bounty_pattern = r'\(bounty\)\s*<font[^>]*><b><color[^>]*>([\d,]+)\s+ISK</color>[^>]*>.*?added to next bounty payout'
-        match = re.search(bounty_pattern, line)
+        # Simplified pattern to catch more variations
+        bounty_patterns = [
+            r'\(bounty\)\s*.*?<color[^>]*>([\d,]+)\s+ISK</color>.*?added to next bounty payout',
+            r'\(bounty\)\s*.*?([\d,]+)\s+ISK.*?added to next bounty payout',
+            r'\(bounty\)\s*.*?([\d,]+)\s+ISK',
+        ]
         
-        if match:
-            try:
-                # Remove commas and convert to integer
-                isk_amount = int(match.group(1).replace(',', ''))
-                return isk_amount
-            except ValueError:
-                return None
+        for pattern in bounty_patterns:
+            match = re.search(pattern, line, re.IGNORECASE)
+            if match:
+                try:
+                    # Remove commas and convert to integer
+                    isk_amount = int(match.group(1).replace(',', ''))
+                    print(f"🔍 Bounty detected: {isk_amount:,} ISK from line: {line.strip()}")
+                    return isk_amount
+                except ValueError:
+                    print(f"⚠️ Failed to parse bounty amount: {match.group(1)}")
+                    continue
         
         return None
     
@@ -1183,6 +1253,47 @@ class EVELogReader:
         except Exception as e:
             print(f"Error updating bounty display: {e}")
 
+    def add_test_bounty(self):
+        """Add a test bounty entry for debugging"""
+        try:
+            test_timestamp = datetime.now()
+            test_amount = 1000000  # 1 million ISK
+            test_source = "test_log.txt"
+            
+            self.add_bounty_entry(test_timestamp, test_amount, test_source)
+            self.update_bounty_display()
+            print(f"🧪 Test bounty added: {test_amount:,} ISK")
+            
+        except Exception as e:
+            print(f"Error adding test bounty: {e}")
+    
+    def test_bounty_detection(self):
+        """Test bounty detection on a sample line"""
+        try:
+            # Sample bounty line from your log
+            sample_line = "(bounty) <font size=12><b><color=0xff00aa00>1,266,666 ISK</color=0x77ffffff> added to next bounty payout (payment adjusted)"
+            
+            print(f"🧪 Testing bounty detection on: {sample_line}")
+            
+            bounty_amount = self.extract_bounty(sample_line)
+            if bounty_amount:
+                print(f"✅ Bounty detected: {bounty_amount:,} ISK")
+            else:
+                print("❌ No bounty detected")
+                
+            # Test with a simpler line
+            simple_line = "(bounty) 1,266,666 ISK added to next bounty payout"
+            print(f"🧪 Testing simple line: {simple_line}")
+            
+            bounty_amount = self.extract_bounty(simple_line)
+            if bounty_amount:
+                print(f"✅ Simple bounty detected: {bounty_amount:,} ISK")
+            else:
+                print("❌ Simple bounty not detected")
+                
+        except Exception as e:
+            print(f"Error testing bounty detection: {e}")
+    
     def export_bounties(self):
         """Export bounty tracking data to a file"""
         try:
