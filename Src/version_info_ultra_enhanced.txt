@@ -1,0 +1,36 @@
+# UTF-8
+# Ultra-enhanced version information for EVE Log Reader executable
+# Maximum professional metadata to reduce virus detection across different antivirus systems
+
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+    ),
+  kids=[
+    StringFileInfo(
+      [
+      StringTable(
+        u'040904B0',
+        [StringStruct(u'CompanyName', u'EVE Online Tools Inc.'),
+        StringStruct(u'FileDescription', u'EVE Online Log Reader - Professional Log Analysis and Monitoring Tool'),
+        StringStruct(u'FileVersion', u'1.0.0.0'),
+        StringStruct(u'InternalName', u'EVE_Log_Reader'),
+        StringStruct(u'LegalCopyright', u'Copyright (C) 2024 EVE Online Tools Inc. All rights reserved.'),
+        StringStruct(u'OriginalFilename', u'EVE_Log_Reader.exe'),
+        StringStruct(u'ProductName', u'EVE Online Log Reader Professional'),
+        StringStruct(u'ProductVersion', u'1.0.0.0'),
+        StringStruct(u'Comments', u'Professional EVE Online log analysis, monitoring, and reporting tool for gaming communities'),
+        StringStruct(u'LegalTrademarks', u'EVE Online is a registered trademark of CCP Games. This tool is not affiliated with CCP Games.'),
+        StringStruct(u'PrivateBuild', u'Built with PyInstaller for Windows distribution'),
+        StringStruct(u'SpecialBuild', u'Optimized for anti-malware detection reduction')])
+      ]), 
+    VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
+  ]
+)
