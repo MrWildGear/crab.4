@@ -315,14 +315,22 @@ class EVELogReader:
                                            font=("Segoe UI", 9))
         test_link_complete_btn.grid(row=0, column=5, padx=(20, 0))
         
-        # End CONCORD process button
-        end_concord_btn = tk.Button(concord_frame, text="End Process", command=self.end_concord_process,
-                                    bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
-                                    activebackground="#404040",   # Darker when clicked
-                                    activeforeground="#ffffff",  # White text when clicked
-                                    relief="raised", borderwidth=1,
-                                    font=("Segoe UI", 9))
-        end_concord_btn.grid(row=0, column=6, padx=(20, 0))
+        # CRAB end process buttons
+        end_crab_failed_btn = tk.Button(concord_frame, text="Failed", command=self.end_crab_failed,
+                                        bg="#ff4444", fg="#ffffff",  # Red background for failed
+                                        activebackground="#cc3333",   # Darker red when clicked
+                                        activeforeground="#ffffff",  # White text when clicked
+                                        relief="raised", borderwidth=1,
+                                        font=("Segoe UI", 9))
+        end_crab_failed_btn.grid(row=0, column=6, padx=(20, 0))
+        
+        end_crab_submit_btn = tk.Button(concord_frame, text="Submit Data", command=self.end_crab_submit,
+                                        bg="#44ff44", fg="#000000",  # Green background for submit
+                                        activebackground="#33cc33",   # Darker green when clicked
+                                        activeforeground="#000000",  # Black text when clicked
+                                        relief="raised", borderwidth=1,
+                                        font=("Segoe UI", 9))
+        end_crab_submit_btn.grid(row=0, column=7, padx=(20, 0))
         
         # CRAB Bounty Tracking display
         crab_bounty_frame = ttk.LabelFrame(main_frame, text="🦀 CRAB Bounty Tracking", padding="5")
@@ -1053,27 +1061,73 @@ class EVELogReader:
         else:
             messagebox.showwarning("Test Warning", "No link process started. Start a link first.")
     
-    def end_concord_process(self):
-        """End the CONCORD process manually"""
+   def end_crab_failed(self):
+        """End CRAB session as failed - clear countdown and mark as failed"""
         if not self.concord_link_start:
-            messagebox.showwarning("End Process", "No CONCORD process is currently running.")
+            messagebox.showwarning("End CRAB Failed", "No CRAB session is currently running.")
             return
         
         # Ask for confirmation
         result = messagebox.askyesno(
-            "End CONCORD Process", 
-            "Are you sure you want to end the CONCORD process?\n\n"
-            "This will mark the process as completed and change the status to 'Completed'.\n\n"
+            "End CRAB Session - Failed", 
+            "Are you sure you want to end the CRAB session as failed?\n\n"
+            "This will stop the countdown and mark the session as failed.\n\n"
             "This action cannot be undone."
         )
         
         if result:
+            # Stop the countdown
+            self.stop_concord_countdown = False
+            if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
+                self.concord_countdown_thread.join(timeout=1)
+            
+            # Mark as completed but failed
             self.concord_link_completed = True
-            self.concord_status_var.set("Status: Completed")
+            self.concord_status_var.set("Status: Failed")
+            self.concord_countdown_var.set("Countdown: --:--")
             completion_time = datetime.now()
             self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {completion_time.strftime('%H:%M:%S')}")
-            self.update_concord_display()
-            print("✅ CONCORD process manually ended")
+            
+            # End CRAB session
+            self.end_crab_session()
+            
+            # Update CRAB display manually (don't call update_concord_display)
+            self.update_crab_bounty_display()
+            print("❌ CRAB session ended as failed")
+    
+    def end_crab_submit(self):
+        """End CRAB session and submit data from clipboard - clear countdown and mark as completed"""
+        if not self.concord_link_start:
+            messagebox.showwarning("End CRAB Submit", "No CRAB session is currently running.")
+            return
+        
+        # Ask for confirmation
+        result = messagebox.askyesno(
+            "End CRAB Session - Submit Data", 
+            "Are you sure you want to end the CRAB session and submit data?\n\n"
+            "This will stop the countdown and mark the session as completed.\n\n"
+            "This action cannot be undone."
+        )
+        
+        if result:
+            # Stop the countdown
+            self.stop_concord_countdown = True
+            if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
+                self.concord_countdown_thread.join(timeout=1)
+            
+            # Mark as completed successfully
+            self.concord_link_completed = True
+            self.concord_status_var.set("Status: Completed")
+            self.concord_countdown_var.set("Countdown: --:--")
+            completion_time = datetime.now()
+            self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {completion_time.strftime('%H:%M:%S')}")
+            
+            # End CRAB session
+            self.end_crab_session()
+            
+            # Update CRAB display manually (don't call update_concord_display)
+            self.update_crab_bounty_display()
+            print("✅ CRAB session completed and data ready for submission")
     
     def add_bounty_entry(self, timestamp, isk_amount, source_file):
         """Add a new bounty entry to the tracking system"""
@@ -1792,9 +1846,20 @@ class EVELogReader:
         """Update CRAB session status to match CONCORD status"""
         if self.concord_link_start:
             if self.concord_link_completed:
-                # CONCORD is Active, so CRAB should also be Active
-                self.crab_session_active = True
-                self.crab_session_var.set("CRAB Session: Active")
+                # Check if this was manually ended with a specific status
+                current_status = self.concord_status_var.get()
+                if "Failed" in current_status:
+                    # Keep the Failed status
+                    self.crab_session_active = False
+                    self.crab_session_var.set("CRAB Session: Failed")
+                elif "Completed" in current_status:
+                    # Keep the Completed status  
+                    self.crab_session_active = False
+                    self.crab_session_var.set("CRAB Session: Completed")
+                else:
+                    # CONCORD is Active, so CRAB should also be Active
+                    self.crab_session_active = True
+                    self.crab_session_var.set("CRAB Session: Active")
             else:
                 # CONCORD is Linking, so CRAB should also be Linking
                 self.crab_session_active = True
