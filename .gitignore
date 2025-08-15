@@ -25,6 +25,13 @@ MANIFEST
 *.manifest
 *.spec
 
+# Distribution packages
+*.zip
+*.rar
+*.7z
+*.tar.gz
+*.tar.bz2
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
