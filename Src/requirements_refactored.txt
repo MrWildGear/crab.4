@@ -1,0 +1,13 @@
+# Requirements for Refactored EVE Log Reader
+# Core Python packages (usually included with Python)
+# tkinter - GUI framework
+# os - Operating system interface
+# re - Regular expressions
+# datetime - Date and time handling
+# threading - Threading support
+# time - Time-related functions
+# glob - File pattern matching
+# hashlib - Hash algorithms
+# pathlib - Path manipulation
+
+# No external packages required - uses only Python standard library
