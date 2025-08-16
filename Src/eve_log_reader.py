@@ -9,6 +9,7 @@ import time
 import glob
 import hashlib
 import csv
+import requests  # New import for Google Form submission
 
 class EVELogReader:
     def __init__(self, root):
@@ -358,6 +359,15 @@ class EVELogReader:
                                             relief="raised", borderwidth=1,
                                             font=("Segoe UI", 9))
         view_beacon_sessions_btn.grid(row=0, column=9, padx=(20, 0))
+        
+        # Google Form Config button
+        google_form_config_btn = tk.Button(concord_frame, text="Form Config", command=self.configure_google_form,
+                                          bg="#1e1e1e", fg="#ffffff",
+                                          activebackground="#404040",
+                                          activeforeground="#ffffff",
+                                          relief="raised", borderwidth=1,
+                                          font=("Segoe UI", 9))
+        google_form_config_btn.grid(row=0, column=10, padx=(20, 0))
         
         # CRAB Bounty Tracking display
         crab_bounty_frame = ttk.LabelFrame(main_frame, text="🦀 CRAB Bounty Tracking", padding="5")
@@ -1236,6 +1246,9 @@ class EVELogReader:
                 # Save session data to CSV
                 csv_saved = self.save_beacon_session_to_csv(session_data)
                 
+                # Submit to Google Form (if configured)
+                form_submitted = self.submit_to_google_form(session_data)
+                
                 # Stop the countdown
                 self.stop_concord_countdown = True
                 if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
@@ -1255,6 +1268,7 @@ class EVELogReader:
                 
                 # Show success message
                 if csv_saved:
+                    form_status = "✅ Submitted to Google Form" if form_submitted else "⚠️ Google Form not configured"
                     messagebox.showinfo(
                         "Beacon Session Completed", 
                         f"✅ CRAB session completed successfully!\n\n"
@@ -1264,7 +1278,8 @@ class EVELogReader:
                         f"• CRAB Bounty: {session_data['total_crab_bounty']} ISK\n"
                         f"• Rogue Drone Data: {session_data['rogue_drone_data_amount']} units\n"
                         f"• Total Loot Value: {session_data['total_loot_value']} ISK\n\n"
-                        f"📁 Data saved to: beacon_sessions.csv\n\n"
+                        f"📁 Data saved to: beacon_sessions.csv\n"
+                        f"🌐 {form_status}\n\n"
                         f"🔄 Beacon tracking reset for new session."
                     )
                 else:
@@ -2337,6 +2352,326 @@ class EVELogReader:
         except Exception as e:
             print(f"❌ Error exporting beacon sessions: {e}")
             messagebox.showerror("Export Error", f"Error exporting beacon sessions:\n\n{str(e)}")
+
+    def submit_to_google_form(self, session_data):
+        """Submit beacon session data to Google Form"""
+        try:
+            # Load Google Form configuration
+            config_file = "google_form_config.json"
+            if not os.path.exists(config_file):
+                print("⚠️ Google Form configuration not found - skipping form submission")
+                return False
+            
+            with open(config_file, 'r', encoding='utf-8') as f:
+                import json
+                config = json.load(f)
+            
+            form_url = config.get('form_url')
+            field_mappings = config.get('field_mappings', {})
+            
+            if not form_url or "YOUR_FORM_ID" in form_url:
+                print("⚠️ Google Form URL not configured - skipping form submission")
+                return False
+            
+            if not field_mappings:
+                print("⚠️ Google Form field mappings not configured - skipping form submission")
+                return False
+            
+            # Map session data to form fields
+            form_fields = {}
+            for field_name, entry_id in field_mappings.items():
+                # Convert field name to session data key
+                data_key = field_name.lower().replace(' ', '_')
+                if data_key in session_data:
+                    form_fields[entry_id] = session_data[data_key]
+                else:
+                    print(f"⚠️ Field '{field_name}' not found in session data")
+            
+            if not form_fields:
+                print("⚠️ No valid field mappings found - skipping form submission")
+                return False
+            
+            print(f"🌐 Submitting to Google Form: {form_url}")
+            print(f"📊 Form data: {form_fields}")
+            
+            # Submit the form
+            response = requests.post(form_url, data=form_fields, timeout=30)
+            
+            if response.status_code == 200:
+                print("✅ Data submitted to Google Form successfully!")
+                return True
+            else:
+                print(f"❌ Form submission failed: HTTP {response.status_code}")
+                return False
+                
+        except FileNotFoundError:
+            print("⚠️ Google Form configuration file not found - skipping form submission")
+            return False
+        except json.JSONDecodeError as e:
+            print(f"❌ Error reading Google Form configuration: {e}")
+            return False
+        except requests.exceptions.Timeout:
+            print("❌ Google Form submission timed out")
+            return False
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Network error submitting to Google Form: {e}")
+            return False
+        except Exception as e:
+            print(f"❌ Error submitting to Google Form: {e}")
+            return False
+
+    def get_google_form_status(self):
+        """Get current Google Form submission status"""
+        try:
+            config_file = "google_form_config.json"
+            if not os.path.exists(config_file):
+                return "Not Configured"
+            
+            with open(config_file, 'r', encoding='utf-8') as f:
+                import json
+                config = json.load(f)
+            
+            form_url = config.get('form_url', '')
+            field_mappings = config.get('field_mappings', {})
+            
+            if "YOUR_FORM_ID" in form_url or not form_url:
+                return "URL Not Set"
+            elif not field_mappings:
+                return "Fields Not Mapped"
+            else:
+                return f"Configured ({len(field_mappings)} fields)"
+                
+        except Exception as e:
+            print(f"Error checking Google Form status: {e}")
+            return "Error"
+
+    def configure_google_form(self):
+        """Configure Google Form URL and field mappings"""
+        try:
+            # Create configuration window
+            config_window = tk.Toplevel(self.root)
+            config_window.title("Google Form Configuration")
+            config_window.geometry("600x500")
+            config_window.configure(bg="#2b2b2b")
+            config_window.resizable(False, False)
+            
+            # Make window modal
+            config_window.transient(self.root)
+            config_window.grab_set()
+            
+            # Main frame
+            main_frame = ttk.Frame(config_window)
+            main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+            
+            # Title
+            title_label = ttk.Label(main_frame, text="🌐 Google Form Configuration", 
+                                   font=("Segoe UI", 14, "bold"))
+            title_label.pack(pady=(0, 20))
+            
+            # Instructions
+            instructions = """To configure Google Form submission:
+
+1. Create a Google Form with the required fields
+2. Get the form submission URL
+3. Get the entry IDs for each field
+4. Enter the information below
+
+The form will automatically submit beacon session data after each completion."""
+            
+            instructions_label = ttk.Label(main_frame, text=instructions, 
+                                         font=("Segoe UI", 9), justify=tk.LEFT)
+            instructions_label.pack(pady=(0, 20))
+            
+            # Form URL input
+            url_frame = ttk.Frame(main_frame)
+            url_frame.pack(fill=tk.X, pady=(0, 10))
+            
+            url_label = ttk.Label(url_frame, text="Form Submission URL:")
+            url_label.pack(anchor=tk.W)
+            
+            url_entry = tk.Entry(url_frame, width=70, font=("Consolas", 9))
+            url_entry.pack(fill=tk.X, pady=(5, 0))
+            url_entry.insert(0, "https://docs.google.com/forms/d/e/YOUR_FORM_ID/formResponse")
+            
+            # Field mappings frame
+            mappings_frame = ttk.LabelFrame(main_frame, text="Field Mappings", padding="10")
+            mappings_frame.pack(fill=tk.BOTH, expand=True, pady=(20, 0))
+            
+            # Create field mapping entries
+            field_mappings = {}
+            fields = [
+                ("Beacon ID", "entry.123456789"),
+                ("Beacon Start", "entry.234567890"),
+                ("Beacon End", "entry.345678901"),
+                ("Total Time", "entry.456789012"),
+                ("CRAB Bounty", "entry.567890123"),
+                ("Rogue Data Amount", "entry.678901234"),
+                ("Rogue Data Value", "entry.789012345"),
+                ("Total Loot Value", "entry.890123456"),
+                ("Loot Details", "entry.901234567"),
+                ("Source File", "entry.012345678"),
+                ("Export Date", "entry.123456789")
+            ]
+            
+            for i, (field_name, default_entry) in enumerate(fields):
+                row_frame = ttk.Frame(mappings_frame)
+                row_frame.pack(fill=tk.X, pady=2)
+                
+                field_label = ttk.Label(row_frame, text=f"{field_name}:", width=20, anchor=tk.W)
+                field_label.grid(row=0, column=0, sticky=tk.W)
+                
+                entry_field = tk.Entry(row_frame, width=20, font=("Consolas", 9))
+                entry_field.grid(row=0, column=1, padx=(10, 0))
+                entry_field.insert(0, default_entry)
+                
+                field_mappings[field_name] = entry_field
+            
+            # Buttons frame
+            button_frame = ttk.Frame(main_frame)
+            button_frame.pack(pady=(20, 0))
+            
+            # Test submission button
+            test_btn = tk.Button(button_frame, text="Test Form Submission", 
+                                command=lambda: self.test_google_form_submission(url_entry.get(), field_mappings),
+                                bg="#1e1e1e", fg="#ffffff",
+                                activebackground="#404040",
+                                activeforeground="#ffffff",
+                                relief="raised", borderwidth=1,
+                                font=("Segoe UI", 9))
+            test_btn.pack(side=tk.LEFT, padx=(0, 10))
+            
+            # Save configuration button
+            save_btn = tk.Button(button_frame, text="Save Configuration", 
+                                command=lambda: self.save_google_form_config(url_entry.get(), field_mappings, config_window),
+                                bg="#44ff44", fg="#000000",
+                                activebackground="#22cc22",
+                                activeforeground="#000000",
+                                relief="raised", borderwidth=1,
+                                font=("Segoe UI", 9, "bold"))
+            save_btn.pack(side=tk.LEFT, padx=(0, 10))
+            
+            # Cancel button
+            cancel_btn = tk.Button(button_frame, text="Cancel", 
+                                  command=config_window.destroy,
+                                  bg="#ff4444", fg="#ffffff",
+                                  activebackground="#cc2222",
+                                  activeforeground="#ffffff",
+                                  relief="raised", borderwidth=1,
+                                  font=("Segoe UI", 9))
+            cancel_btn.pack(side=tk.LEFT)
+            
+            print("🔧 Google Form configuration window opened")
+            
+        except Exception as e:
+            print(f"❌ Error opening Google Form configuration: {e}")
+            messagebox.showerror("Error", f"Error opening configuration window:\n\n{str(e)}")
+
+    def test_google_form_submission(self, form_url, field_mappings):
+        """Test Google Form submission with sample data"""
+        try:
+            if "YOUR_FORM_ID" in form_url:
+                messagebox.showwarning("Invalid URL", "Please enter a valid Google Form submission URL first.")
+                return
+            
+            # Create sample session data for testing
+            sample_data = {
+                'beacon_id': 'TEST_BEACON_123',
+                'beacon_start': '2025-01-01 12:00:00',
+                'beacon_end': '2025-01-01 12:30:00',
+                'total_time': '0:30:00',
+                'total_crab_bounty': '1,000,000',
+                'rogue_drone_data_amount': '100',
+                'rogue_drone_data_value': '10,000,000',
+                'total_loot_value': '15,000,000',
+                'loot_details': 'Test loot data',
+                'source_file': 'test_file.txt',
+                'export_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+            
+            # Map to form fields
+            form_fields = {}
+            for field_name, entry_widget in field_mappings.items():
+                entry_id = entry_widget.get().strip()
+                if entry_id and entry_id != "entry.123456789":  # Skip default placeholder
+                    form_fields[entry_id] = sample_data.get(field_name.lower().replace(' ', '_'), '')
+            
+            if not form_fields:
+                messagebox.showwarning("No Fields", "Please configure at least one field mapping.")
+                return
+            
+            print(f"🧪 Testing Google Form submission to: {form_url}")
+            print(f"📊 Test data: {form_fields}")
+            
+            # Submit test data
+            response = requests.post(form_url, data=form_fields, timeout=30)
+            
+            if response.status_code == 200:
+                messagebox.showinfo("Test Successful", 
+                                  f"✅ Test submission successful!\n\n"
+                                  f"Form URL: {form_url}\n"
+                                  f"Fields: {len(form_fields)}\n"
+                                  f"Response: HTTP {response.status_code}\n\n"
+                                  f"Check your Google Form to see the test entry.")
+                print("✅ Test submission successful!")
+            else:
+                messagebox.showwarning("Test Failed", 
+                                     f"⚠️ Test submission failed:\n\n"
+                                     f"HTTP Status: {response.status_code}\n"
+                                     f"Response: {response.text[:200]}...\n\n"
+                                     f"Check your form URL and field mappings.")
+                print(f"❌ Test submission failed: HTTP {response.status_code}")
+                
+        except requests.exceptions.Timeout:
+            messagebox.showerror("Test Failed", "Test submission timed out. Check your internet connection.")
+        except requests.exceptions.RequestException as e:
+            messagebox.showerror("Test Failed", f"Network error during test:\n\n{str(e)}")
+        except Exception as e:
+            messagebox.showerror("Test Failed", f"Error during test:\n\n{str(e)}")
+
+    def save_google_form_config(self, form_url, field_mappings, config_window):
+        """Save Google Form configuration"""
+        try:
+            # Validate form URL
+            if "YOUR_FORM_ID" in form_url:
+                messagebox.showwarning("Invalid URL", "Please enter a valid Google Form submission URL.")
+                return
+            
+            # Collect field mappings
+            config_data = {
+                'form_url': form_url,
+                'field_mappings': {}
+            }
+            
+            for field_name, entry_widget in field_mappings.items():
+                entry_id = entry_widget.get().strip()
+                if entry_id and entry_id != "entry.123456789":  # Skip default placeholder
+                    config_data['field_mappings'][field_name] = entry_id
+            
+            if not config_data['field_mappings']:
+                messagebox.showwarning("No Fields", "Please configure at least one field mapping.")
+                return
+            
+            # Save to configuration file
+            config_file = "google_form_config.json"
+            with open(config_file, 'w', encoding='utf-8') as f:
+                import json
+                json.dump(config_data, f, indent=2, ensure_ascii=False)
+            
+            print(f"💾 Google Form configuration saved to: {config_file}")
+            print(f"📊 Configuration: {config_data}")
+            
+            messagebox.showinfo("Configuration Saved", 
+                              f"✅ Google Form configuration saved successfully!\n\n"
+                              f"Form URL: {form_url}\n"
+                              f"Fields: {len(config_data['field_mappings'])}\n\n"
+                              f"Future beacon sessions will automatically submit to this form.")
+            
+            # Close configuration window
+            config_window.destroy()
+            
+        except Exception as e:
+            print(f"❌ Error saving Google Form configuration: {e}")
+            messagebox.showerror("Save Error", f"Error saving configuration:\n\n{str(e)}")
 
 def main():
     root = tk.Tk()
