@@ -8,6 +8,7 @@ import threading
 import time
 import glob
 import hashlib
+import csv
 
 class EVELogReader:
     def __init__(self, root):
@@ -348,6 +349,15 @@ class EVELogReader:
                                        relief="raised", borderwidth=1,
                                        font=("Segoe UI", 9))
         copy_beacon_id_btn.grid(row=0, column=8, padx=(20, 0))
+        
+        # View Beacon Sessions button
+        view_beacon_sessions_btn = tk.Button(concord_frame, text="View Sessions", command=self.view_beacon_sessions,
+                                            bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                            activebackground="#404040",   # Darker when clicked
+                                            activeforeground="#ffffff",  # White text when clicked
+                                            relief="raised", borderwidth=1,
+                                            font=("Segoe UI", 9))
+        view_beacon_sessions_btn.grid(row=0, column=9, padx=(20, 0))
         
         # CRAB Bounty Tracking display
         crab_bounty_frame = ttk.LabelFrame(main_frame, text="🦀 CRAB Bounty Tracking", padding="5")
@@ -1186,26 +1196,225 @@ class EVELogReader:
         result = messagebox.askyesno(
             "End CRAB Session - Submit Data", 
             "Are you sure you want to end the CRAB session and submit data?\n\n"
-            "This will stop the countdown and mark the session as completed.\n\n"
+            "This will:\n"
+            "• Copy data from your clipboard\n"
+            "• Parse loot information\n"
+            "• End the current beacon session\n"
+            "• Save session data to CSV\n"
+            "• Reset for new beacon\n\n"
             "This action cannot be undone."
         )
         
         if result:
-            # Stop the countdown
-            self.stop_concord_countdown = True
-            if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
-                self.concord_countdown_thread.join(timeout=1)
+            try:
+                # Get clipboard data
+                clipboard_data = self.root.clipboard_get()
+                print(f"📋 Clipboard data retrieved: {len(clipboard_data)} characters")
+                
+                # Parse loot data from clipboard
+                loot_data = self.parse_clipboard_loot(clipboard_data)
+                
+                # Calculate total beacon time
+                beacon_end_time = datetime.now()
+                total_beacon_time = beacon_end_time - self.concord_link_start
+                total_beacon_time_str = str(total_beacon_time).split('.')[0]  # Remove microseconds
+                
+                # Prepare session data for CSV
+                session_data = {
+                    'beacon_id': self.current_beacon_id or 'UNKNOWN',
+                    'beacon_start': self.concord_link_start.strftime('%Y-%m-%d %H:%M:%S'),
+                    'beacon_end': beacon_end_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'total_time': total_beacon_time_str,
+                    'total_crab_bounty': f"{self.crab_total_bounty_isk:,}",
+                    'rogue_drone_data_amount': loot_data.get('rogue_drone_data', 0),
+                    'rogue_drone_data_value': f"{loot_data.get('rogue_drone_data_value', 0):,}",
+                    'total_loot_value': f"{loot_data.get('total_value', 0):,}",
+                    'loot_details': loot_data.get('all_loot', ''),
+                    'source_file': self.beacon_source_file or 'UNKNOWN'
+                }
+                
+                # Save session data to CSV
+                csv_saved = self.save_beacon_session_to_csv(session_data)
+                
+                # Stop the countdown
+                self.stop_concord_countdown = True
+                if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
+                    self.concord_countdown_thread.join(timeout=1)
+                
+                # Mark as completed successfully
+                self.concord_link_completed = True
+                self.concord_status_var.set("Status: Completed")
+                self.concord_countdown_var.set("Countdown: --:--")
+                self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {beacon_end_time.strftime('%H:%M:%S')}")
+                
+                # Reset beacon tracking for new session
+                self.reset_concord_tracking()
+                
+                # Update display
+                self.update_concord_display()
+                
+                # Show success message
+                if csv_saved:
+                    messagebox.showinfo(
+                        "Beacon Session Completed", 
+                        f"✅ CRAB session completed successfully!\n\n"
+                        f"📊 Session Data:\n"
+                        f"• Beacon ID: {session_data['beacon_id']}\n"
+                        f"• Total Time: {total_beacon_time_str}\n"
+                        f"• CRAB Bounty: {session_data['total_crab_bounty']} ISK\n"
+                        f"• Rogue Drone Data: {session_data['rogue_drone_data_amount']} units\n"
+                        f"• Total Loot Value: {session_data['total_loot_value']} ISK\n\n"
+                        f"📁 Data saved to: beacon_sessions.csv\n\n"
+                        f"🔄 Beacon tracking reset for new session."
+                    )
+                else:
+                    messagebox.showwarning(
+                        "Beacon Session Completed", 
+                        f"✅ CRAB session completed successfully!\n\n"
+                        f"⚠️ Warning: Failed to save session data to CSV.\n"
+                        f"Check the console for error details.\n\n"
+                        f"🔄 Beacon tracking reset for new session."
+                    )
+                
+                print(f"✅ CRAB session completed and data submitted successfully")
+                print(f"📊 Session Summary:")
+                print(f"   • Beacon ID: {session_data['beacon_id']}")
+                print(f"   • Total Time: {total_beacon_time_str}")
+                print(f"   • CRAB Bounty: {session_data['total_crab_bounty']} ISK")
+                print(f"   • Rogue Drone Data: {session_data['rogue_drone_data_amount']} units")
+                print(f"   • Total Loot Value: {session_data['total_loot_value']} ISK")
+                
+            except Exception as e:
+                print(f"❌ Error during beacon session submission: {e}")
+                messagebox.showerror(
+                    "Submission Error", 
+                    f"An error occurred while submitting beacon data:\n\n{str(e)}\n\n"
+                    f"Check the console for details."
+                )
+    
+    def parse_clipboard_loot(self, clipboard_text):
+        """Parse loot data from clipboard text"""
+        loot_data = {
+            'rogue_drone_data': 0,
+            'rogue_drone_data_value': 0,
+            'total_value': 0,
+            'all_loot': []
+        }
+        
+        try:
+            lines = clipboard_text.strip().split('\n')
             
-            # Mark as completed successfully
-            self.concord_link_completed = True
-            self.concord_status_var.set("Status: Completed")
-            self.concord_countdown_var.set("Countdown: --:--")
-            completion_time = datetime.now()
-            self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {completion_time.strftime('%H:%M:%S')}")
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Parse loot line format:
+                # Item Name        Amount    Category    Volume    Value
+                # Example: Rogue Drone Infestation Data        1229        Rogue Drone Analysis Data        12,29 m3        122 900 000,00 ISK
+                
+                # Split by multiple spaces to separate fields
+                parts = [part.strip() for part in line.split('        ') if part.strip()]
+                
+                if len(parts) >= 5:
+                    item_name = parts[0]
+                    amount_str = parts[1]
+                    category = parts[2]
+                    volume = parts[3]
+                    value_str = parts[4]
+                    
+                    # Parse amount (remove any non-numeric characters)
+                    try:
+                        amount = int(amount_str.replace(',', ''))
+                    except ValueError:
+                        amount = 1
+                    
+                    # Parse value (remove "ISK" and spaces, convert to float)
+                    try:
+                        value_str_clean = value_str.replace('ISK', '').replace(' ', '').replace(',', '.')
+                        value = float(value_str_clean)
+                    except ValueError:
+                        value = 0
+                    
+                    # Check if this is Rogue Drone Infestation Data
+                    if "Rogue Drone Infestation Data" in item_name:
+                        loot_data['rogue_drone_data'] = amount
+                        loot_data['rogue_drone_data_value'] = value
+                        print(f"🔍 Found Rogue Drone Infestation Data: {amount} units = {value:,.2f} ISK")
+                    
+                    # Add to total value
+                    loot_data['total_value'] += value
+                    
+                    # Store loot details
+                    loot_data['all_loot'].append({
+                        'name': item_name,
+                        'amount': amount,
+                        'category': category,
+                        'volume': volume,
+                        'value': value
+                    })
+                    
+                    print(f"📦 Loot parsed: {item_name} x{amount} = {value:,.2f} ISK")
             
-            # Update display
-            self.update_concord_display()
-            print("✅ CRAB session completed and data ready for submission")
+            print(f"💰 Total loot value: {loot_data['total_value']:,.2f} ISK")
+            print(f"🔍 Rogue Drone Data: {loot_data['rogue_drone_data']} units = {loot_data['rogue_drone_data_value']:,.2f} ISK")
+            
+        except Exception as e:
+            print(f"❌ Error parsing clipboard loot: {e}")
+            # Return default values if parsing fails
+            loot_data['all_loot'] = [{'name': 'PARSE_ERROR', 'amount': 0, 'category': 'ERROR', 'volume': 'ERROR', 'value': 0}]
+        
+        return loot_data
+    
+    def save_beacon_session_to_csv(self, session_data):
+        """Save beacon session data to CSV file"""
+        try:
+            csv_filename = "beacon_sessions.csv"
+            file_exists = os.path.exists(csv_filename)
+            
+            with open(csv_filename, 'a', newline='', encoding='utf-8') as csvfile:
+                import csv
+                writer = csv.writer(csvfile)
+                
+                # Write header if file is new
+                if not file_exists:
+                    header = [
+                        'Beacon ID',
+                        'Beacon Start',
+                        'Beacon End', 
+                        'Total Time',
+                        'Total CRAB Bounty (ISK)',
+                        'Rogue Drone Data Amount',
+                        'Rogue Drone Data Value (ISK)',
+                        'Total Loot Value (ISK)',
+                        'Loot Details',
+                        'Source File',
+                        'Export Date'
+                    ]
+                    writer.writerow(header)
+                
+                # Write session data
+                row = [
+                    session_data['beacon_id'],
+                    session_data['beacon_start'],
+                    session_data['beacon_end'],
+                    session_data['total_time'],
+                    session_data['total_crab_bounty'],
+                    session_data['rogue_drone_data_amount'],
+                    session_data['rogue_drone_data_value'],
+                    session_data['total_loot_value'],
+                    session_data['loot_details'],
+                    session_data['source_file'],
+                    datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                ]
+                writer.writerow(row)
+            
+            print(f"💾 Beacon session data saved to {csv_filename}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error saving beacon session to CSV: {e}")
+            return False
     
     def add_bounty_entry(self, timestamp, isk_amount, source_file):
         """Add a new bounty entry to the tracking system"""
@@ -1960,6 +2169,174 @@ class EVELogReader:
             # No CONCORD link, CRAB is inactive
             self.crab_session_active = False
             self.crab_session_var.set("CRAB Session: Inactive")
+    
+    def view_beacon_sessions(self):
+        """View all beacon session data from CSV file"""
+        try:
+            csv_filename = "beacon_sessions.csv"
+            
+            if not os.path.exists(csv_filename):
+                messagebox.showinfo("No Sessions", "No beacon sessions have been recorded yet.\n\nComplete a beacon session using the 'Submit Data' button to create the first entry.")
+                return
+            
+            # Read CSV data
+            sessions = []
+            with open(csv_filename, 'r', newline='', encoding='utf-8') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    sessions.append(row)
+            
+            if not sessions:
+                messagebox.showinfo("No Sessions", "No beacon sessions found in the CSV file.")
+                return
+            
+            # Create a new window to display the data
+            sessions_window = tk.Toplevel(self.root)
+            sessions_window.title("Beacon Sessions History")
+            sessions_window.geometry("1200x600")
+            sessions_window.configure(bg="#2b2b2b")
+            
+            # Create a frame for the data
+            main_frame = ttk.Frame(sessions_window)
+            main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            
+            # Title label
+            title_label = ttk.Label(main_frame, text=f"📊 Beacon Sessions History - {len(sessions)} Sessions", 
+                                   font=("Segoe UI", 14, "bold"))
+            title_label.pack(pady=(0, 10))
+            
+            # Create text widget with scrollbar
+            text_frame = ttk.Frame(main_frame)
+            text_frame.pack(fill=tk.BOTH, expand=True)
+            
+            text_widget = tk.Text(text_frame, wrap=tk.NONE, 
+                                 bg="#1e1e1e", fg="#ffffff",
+                                 font=("Consolas", 9))
+            
+            # Add horizontal and vertical scrollbars
+            v_scrollbar = tk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview)
+            h_scrollbar = tk.Scrollbar(text_frame, orient=tk.HORIZONTAL, command=text_widget.xview)
+            text_widget.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+            
+            # Grid layout for text widget and scrollbars
+            text_widget.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+            v_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+            h_scrollbar.grid(row=1, column=0, sticky=(tk.W, tk.E))
+            
+            text_frame.columnconfigure(0, weight=1)
+            text_frame.rowconfigure(0, weight=1)
+            
+            # Display header
+            header = "Beacon ID | Start Time | End Time | Duration | CRAB Bounty | Rogue Data | Loot Value | Source File\n"
+            text_widget.insert(tk.END, header)
+            text_widget.insert(tk.END, "-" * 120 + "\n")
+            
+            # Display each session
+            for i, session in enumerate(sessions, 1):
+                # Format the data for display
+                beacon_id = session.get('Beacon ID', 'UNKNOWN')
+                start_time = session.get('Beacon Start', 'UNKNOWN')
+                end_time = session.get('Beacon End', 'UNKNOWN')
+                duration = session.get('Total Time', 'UNKNOWN')
+                crab_bounty = session.get('Total CRAB Bounty (ISK)', '0')
+                rogue_data = session.get('Rogue Drone Data Amount', '0')
+                loot_value = session.get('Total Loot Value (ISK)', '0')
+                source_file = session.get('Source File', 'UNKNOWN')
+                
+                # Shorten long values for display
+                if len(beacon_id) > 20:
+                    beacon_id = "..." + beacon_id[-17:]
+                if len(source_file) > 25:
+                    source_file = "..." + source_file[-22:]
+                
+                # Format the line
+                line = f"{beacon_id:<20} | {start_time:<19} | {end_time:<19} | {duration:<8} | {crab_bounty:<11} | {rogue_data:<10} | {loot_value:<10} | {source_file}\n"
+                text_widget.insert(tk.END, line)
+            
+            # Add summary at the bottom
+            text_widget.insert(tk.END, "\n" + "=" * 120 + "\n")
+            text_widget.insert(tk.END, "📈 SESSION SUMMARY\n")
+            text_widget.insert(tk.END, "=" * 120 + "\n")
+            
+            # Calculate totals
+            total_crab_bounty = sum(float(s.get('Total CRAB Bounty (ISK)', '0').replace(',', '')) for s in sessions)
+            total_rogue_data = sum(int(s.get('Rogue Drone Data Amount', '0')) for s in sessions)
+            total_loot_value = sum(float(s.get('Total Loot Value (ISK)', '0').replace(',', '')) for s in sessions)
+            
+            text_widget.insert(tk.END, f"Total Sessions: {len(sessions)}\n")
+            text_widget.insert(tk.END, f"Total CRAB Bounty: {total_crab_bounty:,.0f} ISK\n")
+            text_widget.insert(tk.END, f"Total Rogue Drone Data: {total_rogue_data:,} units\n")
+            text_widget.insert(tk.END, f"Total Loot Value: {total_loot_value:,.0f} ISK\n")
+            
+            # Make text read-only
+            text_widget.config(state=tk.DISABLED)
+            
+            # Add export button
+            export_btn = tk.Button(main_frame, text="Export to Text File", 
+                                  command=lambda: self.export_beacon_sessions_to_text(sessions),
+                                  bg="#1e1e1e", fg="#ffffff",
+                                  activebackground="#404040",
+                                  activeforeground="#ffffff",
+                                  relief="raised", borderwidth=1,
+                                  font=("Segoe UI", 9))
+            export_btn.pack(pady=(10, 0))
+            
+            print(f"📊 Beacon sessions history displayed: {len(sessions)} sessions")
+            
+        except Exception as e:
+            print(f"❌ Error viewing beacon sessions: {e}")
+            messagebox.showerror("Error", f"Error viewing beacon sessions:\n\n{str(e)}")
+    
+    def export_beacon_sessions_to_text(self, sessions):
+        """Export beacon sessions to a text file"""
+        try:
+            # Get save file path
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+                title="Export Beacon Sessions"
+            )
+            
+            if not file_path:
+                return
+            
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(f"EVE Online Beacon Sessions - Exported on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("=" * 80 + "\n\n")
+                
+                for i, session in enumerate(sessions, 1):
+                    f.write(f"SESSION {i}\n")
+                    f.write("-" * 40 + "\n")
+                    f.write(f"Beacon ID: {session.get('Beacon ID', 'UNKNOWN')}\n")
+                    f.write(f"Start Time: {session.get('Beacon Start', 'UNKNOWN')}\n")
+                    f.write(f"End Time: {session.get('Beacon End', 'UNKNOWN')}\n")
+                    f.write(f"Duration: {session.get('Total Time', 'UNKNOWN')}\n")
+                    f.write(f"CRAB Bounty: {session.get('Total CRAB Bounty (ISK)', '0')} ISK\n")
+                    f.write(f"Rogue Drone Data: {session.get('Rogue Drone Data Amount', '0')} units\n")
+                    f.write(f"Rogue Drone Value: {session.get('Rogue Drone Data Value (ISK)', '0')} ISK\n")
+                    f.write(f"Total Loot Value: {session.get('Total Loot Value (ISK)', '0')} ISK\n")
+                    f.write(f"Source File: {session.get('Source File', 'UNKNOWN')}\n")
+                    f.write(f"Loot Details: {session.get('Loot Details', 'N/A')}\n")
+                    f.write(f"Export Date: {session.get('Export Date', 'UNKNOWN')}\n\n")
+                
+                # Add summary
+                total_crab_bounty = sum(float(s.get('Total CRAB Bounty (ISK)', '0').replace(',', '')) for s in sessions)
+                total_rogue_data = sum(int(s.get('Rogue Drone Data Amount', '0')) for s in sessions)
+                total_loot_value = sum(float(s.get('Total Loot Value (ISK)', '0').replace(',', '')) for s in sessions)
+                
+                f.write("SUMMARY\n")
+                f.write("-" * 40 + "\n")
+                f.write(f"Total Sessions: {len(sessions)}\n")
+                f.write(f"Total CRAB Bounty: {total_crab_bounty:,.0f} ISK\n")
+                f.write(f"Total Rogue Drone Data: {total_rogue_data:,} units\n")
+                f.write(f"Total Loot Value: {total_loot_value:,.0f} ISK\n")
+            
+            messagebox.showinfo("Export Complete", f"Beacon sessions exported successfully to:\n{file_path}")
+            print(f"💾 Beacon sessions exported to: {file_path}")
+            
+        except Exception as e:
+            print(f"❌ Error exporting beacon sessions: {e}")
+            messagebox.showerror("Export Error", f"Error exporting beacon sessions:\n\n{str(e)}")
 
 def main():
     root = tk.Tk()
