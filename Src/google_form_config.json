@@ -1,0 +1,13 @@
+{
+  "form_url": "https://docs.google.com/forms/d/e/1FAIpQLSeQPdllLwJZjkf0AmWJRb201ctCuEoT9FcNmnfeqXBt80grJg/formResponse",
+  "field_mappings": {
+    "Beacon ID": "entry.1520906809",
+    "Total Duration": "entry.66008066",
+    "Total CRAB Bounty": "entry.257705337",
+    "Rogue Drone Data Amount": "entry.1906365497",
+    "Loot Details": "entry.1769084685"
+  },
+  "description": "Simplified configuration for EVE Online CRAB Beacon Session Google Form - 5 essential fields only",
+  "version": "2.0",
+  "last_updated": "2025-01-15"
+}

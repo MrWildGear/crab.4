@@ -10,12 +10,16 @@ import glob
 import hashlib
 import csv
 import requests  # New import for Google Form submission
+import logging  # New import for file logging
 
 class EVELogReader:
     def __init__(self, root):
         self.root = root
         self.root.title("EVE Online Log Reader - Recent Logs Monitor")
         self.root.geometry("1400x900")
+        
+        # Setup logging for Google Form debugging
+        self.setup_logging()
         
         # EVE Online log directory (default location)
         self.eve_log_dir = self.find_eve_log_directory()
@@ -65,6 +69,38 @@ class EVELogReader:
         # Start monitoring automatically since it's enabled by default
         if self.high_freq_var.get():
             self.start_monitoring_only()
+        
+        # Initialize Google Form status display
+        self.update_google_form_status_display()
+    
+    def setup_logging(self):
+        """Setup logging for Google Form debugging"""
+        try:
+            # Create logs directory if it doesn't exist
+            if not os.path.exists('logs'):
+                os.makedirs('logs')
+            
+            # Setup logging to file
+            log_file = os.path.join('logs', 'google_form_debug.log')
+            
+            # Configure logging
+            logging.basicConfig(
+                level=logging.DEBUG,
+                format='%(asctime)s - %(levelname)s - %(message)s',
+                handlers=[
+                    logging.FileHandler(log_file, encoding='utf-8'),
+                    logging.StreamHandler()  # Also log to console
+                ]
+            )
+            
+            # Create logger for this class
+            self.logger = logging.getLogger(__name__)
+            self.logger.info("Logging initialized for Google Form debugging")
+            
+        except Exception as e:
+            print(f"⚠️ Failed to setup logging: {e}")
+            # Fallback to basic logging
+            self.logger = None
     
     def apply_dark_theme(self):
         """Apply dark mode styling to the application"""
@@ -368,6 +404,12 @@ class EVELogReader:
                                           relief="raised", borderwidth=1,
                                           font=("Segoe UI", 9))
         google_form_config_btn.grid(row=0, column=10, padx=(20, 0))
+        
+        # Google Form Status display
+        self.google_form_status_var = tk.StringVar(value="Form Status: Checking...")
+        google_form_status_label = ttk.Label(concord_frame, textvariable=self.google_form_status_var,
+                                            font=("Segoe UI", 8), foreground="#888888")
+        google_form_status_label.grid(row=1, column=9, columnspan=2, sticky=tk.W, padx=(20, 0), pady=(5, 0))
         
         # CRAB Bounty Tracking display
         crab_bounty_frame = ttk.LabelFrame(main_frame, text="🦀 CRAB Bounty Tracking", padding="5")
@@ -1247,7 +1289,11 @@ class EVELogReader:
                 csv_saved = self.save_beacon_session_to_csv(session_data)
                 
                 # Submit to Google Form (if configured)
+                if self.logger:
+                    self.logger.info("Calling Google Form submission")
                 form_submitted = self.submit_to_google_form(session_data)
+                if self.logger:
+                    self.logger.info(f"Google Form submission result: {form_submitted}")
                 
                 # Stop the countdown
                 self.stop_concord_countdown = True
@@ -2356,10 +2402,17 @@ class EVELogReader:
     def submit_to_google_form(self, session_data):
         """Submit beacon session data to Google Form"""
         try:
+            if self.logger:
+                self.logger.info("Starting Google Form submission process")
+                self.logger.debug(f"Session data received: {session_data}")
+            
             # Load Google Form configuration
             config_file = "google_form_config.json"
             if not os.path.exists(config_file):
-                print("⚠️ Google Form configuration not found - skipping form submission")
+                if self.logger:
+                    self.logger.warning("Google Form configuration not found - skipping form submission")
+                else:
+                    print("⚠️ Google Form configuration not found - skipping form submission")
                 return False
             
             with open(config_file, 'r', encoding='utf-8') as f:
@@ -2369,55 +2422,126 @@ class EVELogReader:
             form_url = config.get('form_url')
             field_mappings = config.get('field_mappings', {})
             
+            if self.logger:
+                self.logger.info(f"Loaded config - URL: {form_url}, Fields: {len(field_mappings)}")
+            
             if not form_url or "YOUR_FORM_ID" in form_url:
-                print("⚠️ Google Form URL not configured - skipping form submission")
+                if self.logger:
+                    self.logger.warning("Google Form URL not configured - skipping form submission")
+                else:
+                    print("⚠️ Google Form URL not configured - skipping form submission")
                 return False
             
             if not field_mappings:
-                print("⚠️ Google Form field mappings not configured - skipping form submission")
+                if self.logger:
+                    self.logger.warning("Google Form field mappings not configured - skipping form submission")
+                else:
+                    print("⚠️ Google Form field mappings not configured - skipping form submission")
                 return False
             
             # Map session data to form fields
             form_fields = {}
+            
+            # Define mapping from Google Form field names to session data keys
+            field_to_data_mapping = {
+                "Beacon ID": "beacon_id",
+                "Total Duration": "total_time",
+                "Total CRAB Bounty": "total_crab_bounty",
+                "Rogue Drone Data Amount": "rogue_drone_data_amount",
+                "Loot Details": "loot_details"
+            }
+            
+            if self.logger:
+                self.logger.debug(f"Field mapping: {field_to_data_mapping}")
+                self.logger.debug(f"Available session data keys: {list(session_data.keys())}")
+            
             for field_name, entry_id in field_mappings.items():
-                # Convert field name to session data key
-                data_key = field_name.lower().replace(' ', '_')
-                if data_key in session_data:
-                    form_fields[entry_id] = session_data[data_key]
+                # Get the corresponding session data key
+                data_key = field_to_data_mapping.get(field_name)
+                if data_key and data_key in session_data:
+                    # Special handling for Loot Details - format as readable text
+                    if field_name == "Loot Details" and isinstance(session_data[data_key], list):
+                        # Format loot list as readable text
+                        loot_text = []
+                        for item in session_data[data_key]:
+                            loot_text.append(f"{item['name']} x{item['amount']} ({item['category']}) - {item['volume']} = {item['value']:,.2f} ISK")
+                        form_fields[entry_id] = "\n".join(loot_text)
+                    else:
+                        form_fields[entry_id] = session_data[data_key]
+                    
+                    if self.logger:
+                        self.logger.debug(f"Mapped '{field_name}' -> '{data_key}' -> '{entry_id}': {form_fields[entry_id]}")
                 else:
-                    print(f"⚠️ Field '{field_name}' not found in session data")
+                    if self.logger:
+                        self.logger.warning(f"Field '{field_name}' not found in session data (key: {data_key})")
+                    else:
+                        print(f"⚠️ Field '{field_name}' not found in session data (key: {data_key})")
             
             if not form_fields:
-                print("⚠️ No valid field mappings found - skipping form submission")
+                if self.logger:
+                    self.logger.warning("No valid field mappings found - skipping form submission")
+                else:
+                    print("⚠️ No valid field mappings found - skipping form submission")
                 return False
             
-            print(f"🌐 Submitting to Google Form: {form_url}")
-            print(f"📊 Form data: {form_fields}")
+            if self.logger:
+                self.logger.info(f"Submitting to Google Form: {form_url}")
+                self.logger.info(f"Form data prepared: {form_fields}")
+            else:
+                print(f"🌐 Submitting to Google Form: {form_url}")
+                print(f"📊 Form data: {form_fields}")
+                print(f"📋 Session data keys available: {list(session_data.keys())}")
             
             # Submit the form
             response = requests.post(form_url, data=form_fields, timeout=30)
             
+            if self.logger:
+                self.logger.info(f"Form submission response: HTTP {response.status_code}")
+                self.logger.debug(f"Response content: {response.text[:500]}...")  # First 500 chars
+            
             if response.status_code == 200:
-                print("✅ Data submitted to Google Form successfully!")
+                if self.logger:
+                    self.logger.info("✅ Data submitted to Google Form successfully!")
+                else:
+                    print("✅ Data submitted to Google Form successfully!")
                 return True
             else:
-                print(f"❌ Form submission failed: HTTP {response.status_code}")
+                if self.logger:
+                    self.logger.error(f"❌ Form submission failed: HTTP {response.status_code}")
+                    self.logger.error(f"Response content: {response.text}")
+                else:
+                    print(f"❌ Form submission failed: HTTP {response.status_code}")
                 return False
                 
         except FileNotFoundError:
-            print("⚠️ Google Form configuration file not found - skipping form submission")
+            if self.logger:
+                self.logger.error("Google Form configuration file not found - skipping form submission")
+            else:
+                print("⚠️ Google Form configuration file not found - skipping form submission")
             return False
         except json.JSONDecodeError as e:
-            print(f"❌ Error reading Google Form configuration: {e}")
+            if self.logger:
+                self.logger.error(f"Error reading Google Form configuration: {e}")
+            else:
+                print(f"❌ Error reading Google Form configuration: {e}")
             return False
         except requests.exceptions.Timeout:
-            print("❌ Google Form submission timed out")
+            if self.logger:
+                self.logger.error("Google Form submission timed out")
+            else:
+                print("❌ Google Form submission timed out")
             return False
         except requests.exceptions.RequestException as e:
-            print(f"❌ Network error submitting to Google Form: {e}")
+            if self.logger:
+                self.logger.error(f"Network error submitting to Google Form: {e}")
+            else:
+                print(f"❌ Network error submitting to Google Form: {e}")
             return False
         except Exception as e:
-            print(f"❌ Error submitting to Google Form: {e}")
+            if self.logger:
+                self.logger.error(f"Unexpected error submitting to Google Form: {e}", exc_info=True)
+            else:
+                print(f"❌ Error submitting to Google Form: {e}")
             return False
 
     def get_google_form_status(self):
@@ -2444,6 +2568,15 @@ class EVELogReader:
         except Exception as e:
             print(f"Error checking Google Form status: {e}")
             return "Error"
+    
+    def update_google_form_status_display(self):
+        """Update the Google Form status display in the UI"""
+        try:
+            status = self.get_google_form_status()
+            self.google_form_status_var.set(f"Form Status: {status}")
+        except Exception as e:
+            print(f"Error updating Google Form status display: {e}")
+            self.google_form_status_var.set("Form Status: Error")
 
     def configure_google_form(self):
         """Configure Google Form URL and field mappings"""
@@ -2491,7 +2624,37 @@ The form will automatically submit beacon session data after each completion."""
             
             url_entry = tk.Entry(url_frame, width=70, font=("Consolas", 9))
             url_entry.pack(fill=tk.X, pady=(5, 0))
-            url_entry.insert(0, "https://docs.google.com/forms/d/e/YOUR_FORM_ID/formResponse")
+            
+            # Load existing configuration if available
+            default_url = "https://docs.google.com/forms/d/e/YOUR_FORM_ID/formResponse"
+            default_field_mappings = {
+                "Beacon ID": "entry.123456789",
+                "Beacon Start": "entry.234567890",
+                "Beacon End": "entry.345678901",
+                "Total Time": "entry.456789012",
+                "CRAB Bounty": "entry.567890123",
+                "Rogue Data Amount": "entry.678901234",
+                "Rogue Data Value": "entry.789012345",
+                "Total Loot Value": "entry.890123456",
+                "Loot Details": "entry.901234567",
+                "Source File": "entry.012345678",
+                "Export Date": "entry.123456789"
+            }
+            
+            # Try to load existing configuration
+            try:
+                if os.path.exists("google_form_config.json"):
+                    with open("google_form_config.json", 'r', encoding='utf-8') as f:
+                        import json
+                        config = json.load(f)
+                        if config.get('form_url') and "YOUR_FORM_ID" not in config.get('form_url', ''):
+                            default_url = config.get('form_url')
+                        if config.get('field_mappings'):
+                            default_field_mappings.update(config.get('field_mappings'))
+            except Exception as e:
+                print(f"⚠️ Could not load existing configuration: {e}")
+            
+            url_entry.insert(0, default_url)
             
             # Field mappings frame
             mappings_frame = ttk.LabelFrame(main_frame, text="Field Mappings", padding="10")
@@ -2500,17 +2663,17 @@ The form will automatically submit beacon session data after each completion."""
             # Create field mapping entries
             field_mappings = {}
             fields = [
-                ("Beacon ID", "entry.123456789"),
-                ("Beacon Start", "entry.234567890"),
-                ("Beacon End", "entry.345678901"),
-                ("Total Time", "entry.456789012"),
-                ("CRAB Bounty", "entry.567890123"),
-                ("Rogue Data Amount", "entry.678901234"),
-                ("Rogue Data Value", "entry.789012345"),
-                ("Total Loot Value", "entry.890123456"),
-                ("Loot Details", "entry.901234567"),
-                ("Source File", "entry.012345678"),
-                ("Export Date", "entry.123456789")
+                ("Beacon ID", default_field_mappings.get("Beacon ID", "entry.123456789")),
+                ("Beacon Start", default_field_mappings.get("Beacon Start", "entry.234567890")),
+                ("Beacon End", default_field_mappings.get("Beacon End", "entry.345678901")),
+                ("Total Time", default_field_mappings.get("Total Time", "entry.456789012")),
+                ("CRAB Bounty", default_field_mappings.get("CRAB Bounty", "entry.567890123")),
+                ("Rogue Data Amount", default_field_mappings.get("Rogue Data Amount", "entry.678901234")),
+                ("Rogue Data Value", default_field_mappings.get("Rogue Data Value", "entry.789012345")),
+                ("Total Loot Value", default_field_mappings.get("Total Loot Value", "entry.890123456")),
+                ("Loot Details", default_field_mappings.get("Loot Details", "entry.901234567")),
+                ("Source File", default_field_mappings.get("Source File", "entry.012345678")),
+                ("Export Date", default_field_mappings.get("Export Date", "entry.123456789"))
             ]
             
             for i, (field_name, default_entry) in enumerate(fields):
@@ -2668,6 +2831,9 @@ The form will automatically submit beacon session data after each completion."""
             
             # Close configuration window
             config_window.destroy()
+            
+            # Update the status display
+            self.update_google_form_status_display()
             
         except Exception as e:
             print(f"❌ Error saving Google Form configuration: {e}")
