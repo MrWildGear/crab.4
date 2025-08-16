@@ -42,6 +42,8 @@ class EVELogReader:
         self.concord_countdown_thread = None  # Thread for countdown timer
         self.stop_concord_countdown = False  # Flag to stop countdown
         self.concord_countdown_color = "#ffff00"  # Default yellow color for countdown
+        self.current_beacon_id = None  # Unique Beacon ID for current session
+        self.beacon_source_file = None  # Source log file for current beacon
         
         # CRAB-specific bounty tracking system
         self.crab_bounty_entries = []  # Store bounty entries during CRAB sessions
@@ -289,6 +291,12 @@ class EVELogReader:
         concord_time_label = ttk.Label(concord_frame, textvariable=self.concord_time_var)
         concord_time_label.grid(row=0, column=2, sticky=tk.W, padx=(0, 20))
         
+        # Beacon ID display
+        self.beacon_id_var = tk.StringVar(value="Beacon ID: None")
+        beacon_id_label = ttk.Label(concord_frame, textvariable=self.beacon_id_var,
+                                   font=("Consolas", 8), foreground="#888888")
+        beacon_id_label.grid(row=1, column=0, columnspan=3, sticky=tk.W, padx=(0, 20), pady=(5, 0))
+        
         # CONCORD control buttons
         reset_concord_btn = tk.Button(concord_frame, text="Reset CONCORD Tracking", command=self.reset_concord_tracking,
                                      bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
@@ -331,6 +339,15 @@ class EVELogReader:
                                         relief="raised", borderwidth=1,
                                         font=("Segoe UI", 9))
         end_crab_submit_btn.grid(row=0, column=7, padx=(20, 0))
+        
+        # Copy Beacon ID button
+        copy_beacon_id_btn = tk.Button(concord_frame, text="Copy Beacon ID", command=self.copy_beacon_id,
+                                       bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                       activebackground="#404040",   # Darker when clicked
+                                       activeforeground="#ffffff",  # White text when clicked
+                                       relief="raised", borderwidth=1,
+                                       font=("Segoe UI", 9))
+        copy_beacon_id_btn.grid(row=0, column=8, padx=(20, 0))
         
         # CRAB Bounty Tracking display
         crab_bounty_frame = ttk.LabelFrame(main_frame, text="🦀 CRAB Bounty Tracking", padding="5")
@@ -671,12 +688,22 @@ class EVELogReader:
                             # Check for CONCORD link messages
                             concord_message_type = self.detect_concord_message(line)
                             if concord_message_type == "link_start":
-                                self.concord_link_start = datetime.now()
+                                beacon_timestamp = datetime.now()
+                                self.concord_link_start = beacon_timestamp
                                 self.concord_status_var.set("Status: Linking")
                                 self.concord_countdown_active = True
+                                
+                                # Generate unique Beacon ID
+                                self.current_beacon_id = self.generate_beacon_id(source_file, beacon_timestamp)
+                                self.beacon_source_file = source_file
+                                
                                 self.start_concord_countdown()
                                 # Start CRAB bounty tracking session
                                 self.start_crab_session()
+                                
+                                print(f"🔗 CONCORD Beacon started - ID: {self.current_beacon_id}")
+                                print(f"📁 Source file: {self.beacon_source_file}")
+                                
                             elif concord_message_type == "link_complete":
                                 self.concord_link_completed = True
                                 self.concord_status_var.set("Status: Active")
@@ -686,6 +713,8 @@ class EVELogReader:
                                 self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {datetime.now().strftime('%H:%M:%S')}")
                                 self.update_concord_display()
                                 # CRAB session status will be updated by update_concord_display()
+                                
+                                print(f"✅ CONCORD Beacon completed - ID: {self.current_beacon_id}")
                             
                             self.all_log_entries.append((timestamp, line, source_file))
                         
@@ -741,6 +770,12 @@ class EVELogReader:
                 status_text += " | 🔗 CONCORD: Linking"
             elif self.concord_link_completed:
                 status_text += " | 🔗 CONCORD: Active"
+            
+            # Add Beacon ID to status if available
+            if self.current_beacon_id:
+                # Show shortened version for status bar
+                short_id = self.current_beacon_id[-12:]  # Last 12 characters
+                status_text += f" | 🆔 Beacon: ...{short_id}"
             
             self.status_var.set(status_text)
             
@@ -910,6 +945,38 @@ class EVELogReader:
         
         return None
     
+    def generate_beacon_id(self, source_file, beacon_timestamp):
+        """Generate unique Beacon ID from file timestamp and beacon activation time"""
+        try:
+            # Parse filename to extract timestamp and character ID
+            # Format: YYYYMMDD_HHMMSS_CharacterID.txt
+            filename = os.path.basename(source_file)
+            if not filename.endswith('.txt'):
+                return None
+            
+            # Extract parts from filename
+            parts = filename.replace('.txt', '').split('_')
+            if len(parts) != 3:
+                return None
+            
+            file_date = parts[0]  # YYYYMMDD
+            file_time = parts[1]  # HHMMSS
+            character_id = parts[2]  # Character ID
+            
+            # Format beacon timestamp
+            beacon_date = beacon_timestamp.strftime('%Y%m%d')
+            beacon_time = beacon_timestamp.strftime('%H%M%S')
+            
+            # Combine: FileTimestamp + CharacterID + BeaconTimestamp
+            beacon_id = f"{file_date}{file_time}{character_id}{beacon_date}{beacon_time}"
+            
+            print(f"🔗 Generated Beacon ID: {beacon_id}")
+            return beacon_id
+            
+        except Exception as e:
+            print(f"Error generating Beacon ID: {e}")
+            return None
+    
     def detect_concord_message(self, line):
         """Detect CONCORD Rogue Analysis Beacon messages"""
         # Pattern for link start message
@@ -999,6 +1066,12 @@ class EVELogReader:
             self.concord_status_var.set("Status: Inactive")
             self.concord_countdown_var.set("Countdown: --:--")
         
+        # Update Beacon ID display
+        if self.current_beacon_id:
+            self.beacon_id_var.set(f"Beacon ID: {self.current_beacon_id}")
+        else:
+            self.beacon_id_var.set("Beacon ID: None")
+        
         # Update CRAB session status to match CONCORD status
         self.update_crab_session_status()
     
@@ -1026,6 +1099,8 @@ class EVELogReader:
         self.concord_link_completed = False
         self.concord_countdown_active = False
         self.stop_concord_countdown = False
+        self.current_beacon_id = None
+        self.beacon_source_file = None
         
         # Reset CRAB tracking
         self.reset_crab_bounty_tracking()
@@ -1037,9 +1112,15 @@ class EVELogReader:
     def test_concord_link_start(self):
         """Test function to simulate CONCORD link start message"""
         print("🧪 Testing CONCORD link start...")
-        self.concord_link_start = datetime.now()
+        beacon_timestamp = datetime.now()
+        self.concord_link_start = beacon_timestamp
         self.concord_status_var.set("Status: Linking")
         self.concord_countdown_active = True
+        
+        # Generate test Beacon ID
+        self.current_beacon_id = f"TEST{beacon_timestamp.strftime('%Y%m%d%H%M%S')}"
+        self.beacon_source_file = "TEST_FILE.txt"
+        
         self.start_concord_countdown()
         self.concord_time_var.set(f"Link Time: Started at {self.concord_link_start.strftime('%H:%M:%S')}")
         # Update displays to sync CRAB session status
@@ -1838,6 +1919,20 @@ class EVELogReader:
         self.crab_session_active = False
         self.update_crab_bounty_display()
         print("🦀 CRAB bounty tracking session ended")
+    
+    def copy_beacon_id(self):
+        """Copy current Beacon ID to clipboard"""
+        if self.current_beacon_id:
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(self.current_beacon_id)
+                print(f"📋 Beacon ID copied to clipboard: {self.current_beacon_id}")
+                messagebox.showinfo("Beacon ID Copied", f"Beacon ID copied to clipboard:\n{self.current_beacon_id}")
+            except Exception as e:
+                print(f"Error copying Beacon ID: {e}")
+                messagebox.showerror("Error", f"Failed to copy Beacon ID: {str(e)}")
+        else:
+            messagebox.showwarning("No Beacon ID", "No active Beacon ID to copy.")
     
     def update_crab_session_status(self):
         """Update CRAB session status to match CONCORD status"""
