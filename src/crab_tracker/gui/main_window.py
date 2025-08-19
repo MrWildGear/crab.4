@@ -6,12 +6,13 @@ including log display, controls, and status information.
 """
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, messagebox, filedialog
 import threading
 import time
 from datetime import datetime
 from typing import List, Optional
 import os
+import hashlib
 
 from ..core.log_parser import LogParser, LogEntry
 from ..core.bounty_tracker import BountyTracker
@@ -27,17 +28,12 @@ class MainWindow:
     """Main application window for CRAB Tracker."""
     
     def __init__(self, root):
-        """
-        Initialize the main window.
-        
-        Args:
-            root: Tkinter root window
-        """
+        """Initialize the main window."""
         self.root = root
-        self.root.title("CRAB Tracker - EVE Online Log Reader & Beacon Analysis")
-        self.root.geometry("1400x900")
+        self.root.title("CRAB Tracker - EVE Online Log Reader")
+        self.root.geometry("1200x800")
         
-        # Initialize logging service first
+        # Initialize services
         self.logging_service = LoggingService()
         self.logging_service.setup_logging()
         
@@ -48,23 +44,39 @@ class MainWindow:
         self.file_monitor = FileMonitor()
         self.google_forms_service = GoogleFormsService()
         
-        # Application state
-        self.all_log_entries: List[LogEntry] = []
+        # State variables
+        self.monitoring_var = tk.BooleanVar(value=True)  # Auto-monitor enabled by default
+        self.high_freq_var = tk.BooleanVar(value=True)   # High-frequency monitoring enabled by default
         self.monitoring_active = False
+        self.monitoring_thread = None
+        self.stop_monitoring_flag = False
+        
+        # File tracking for change detection
+        self.last_file_sizes = {}
+        self.last_file_hashes = {}
+        
+        # Display variables
+        self.all_log_entries = []
         self.last_refresh_time = datetime.now()
         
         # Setup UI
         self.setup_ui()
         self.setup_file_monitoring()
         
-        # Apply dark theme after all widgets are created
-        self.apply_dark_theme()
-        
-        # Start initial load
+        # Load initial log files
         self.load_log_files()
         
-        # Start monitoring if enabled by default
-        self.start_monitoring()
+        # Start auto-monitoring automatically since it's enabled by default
+        if self.monitoring_var.get():
+            self.start_auto_monitoring()
+        
+        self.apply_dark_theme()
+        
+        # Start display update timer
+        self.update_display_timer()
+        
+        # Force initial status update
+        self.update_status_display()
     
     def setup_ui(self):
         """Setup the user interface."""
@@ -116,9 +128,13 @@ class MainWindow:
         ttk.Button(button_frame, text="Export Logs", command=self.export_logs).grid(row=0, column=3, padx=5)
         
         # Monitoring controls
-        self.monitoring_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(button_frame, text="Auto-monitor", variable=self.monitoring_var, 
-                       command=self.toggle_monitoring).grid(row=0, column=4, padx=5)
+        ttk.Label(button_frame, text="Auto-monitor:").grid(row=0, column=4, padx=5, pady=2)
+        ttk.Checkbutton(button_frame, text="", variable=self.monitoring_var, 
+                       command=self.toggle_monitoring).grid(row=0, column=5, padx=5, pady=2)
+        
+        ttk.Label(button_frame, text="High-frequency:").grid(row=0, column=6, padx=5, pady=2)
+        ttk.Checkbutton(button_frame, text="", variable=self.high_freq_var, 
+                       command=self.toggle_high_frequency).grid(row=0, column=7, padx=5, pady=2)
     
     def create_log_display(self):
         """Create the main log display area."""
@@ -409,6 +425,69 @@ class MainWindow:
         )
         self.load_log_files()
     
+    def refresh_logs(self):
+        """Refresh logs from monitored files."""
+        try:
+            # Get recent files
+            recent_files = self.file_monitor.get_recent_files()
+            
+            # Parse all files
+            self.all_log_entries = []
+            for file_path in recent_files:
+                if os.path.exists(file_path):
+                    entries = self.log_parser.parse_log_file(file_path)
+                    self.all_log_entries.extend(entries)
+            
+            # Sort by timestamp
+            self.all_log_entries = self.log_parser.sort_entries_by_time(self.all_log_entries)
+            
+            # Update display
+            self.update_log_display()
+            
+            # Update last refresh time
+            self.last_refresh_time = datetime.now()
+            
+            # Force status update
+            self.update_status_display()
+            
+            print(f"Logs refreshed: {len(self.all_log_entries)} entries from {len(recent_files)} files")
+            
+        except Exception as e:
+            print(f"Error refreshing logs: {e}")
+            # Still update the refresh time even if there's an error
+            self.last_refresh_time = datetime.now()
+            self.update_status_display()
+    
+    def clear_display(self):
+        """Clear the log display."""
+        self.log_text.delete(1.0, tk.END)
+        self.all_log_entries = []
+        self.update_status_display()
+    
+    def export_logs(self):
+        """Export current logs to a file."""
+        if not self.all_log_entries:
+            messagebox.showinfo("Info", "No logs to export")
+            return
+        
+        try:
+            filename = f"eve_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            filepath = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+                initialname=filename
+            )
+            
+            if filepath:
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    for entry in self.all_log_entries:
+                        f.write(f"{entry}\n")
+                
+                messagebox.showinfo("Success", f"Logs exported to {filepath}")
+        
+        except Exception as e:
+            messagebox.showerror("Error", f"Error exporting logs: {e}")
+    
     def load_log_files(self):
         """Load and display log files based on current settings."""
         try:
@@ -418,21 +497,30 @@ class MainWindow:
             # Parse all files
             self.all_log_entries = []
             for file_path in recent_files:
-                entries = self.log_parser.parse_log_file(file_path)
-                self.all_log_entries.extend(entries)
+                if os.path.exists(file_path):
+                    entries = self.log_parser.parse_log_file(file_path)
+                    self.all_log_entries.extend(entries)
             
             # Sort by timestamp
             self.all_log_entries = self.log_parser.sort_entries_by_time(self.all_log_entries)
             
             # Update display
             self.update_log_display()
-            self.update_status_display()
             
             # Update last refresh time
             self.last_refresh_time = datetime.now()
             
+            # Force status update
+            self.update_status_display()
+            
+            print(f"Logs loaded: {len(self.all_log_entries)} entries from {len(recent_files)} files")
+            
         except Exception as e:
+            print(f"Error loading log files: {e}")
             messagebox.showerror("Error", f"Error loading log files: {e}")
+            # Still update the refresh time even if there's an error
+            self.last_refresh_time = datetime.now()
+            self.update_status_display()
     
     def update_log_display(self):
         """Update the log display with current entries."""
@@ -466,85 +554,104 @@ class MainWindow:
     
     def update_status_display(self):
         """Update the status display."""
-        # Update monitoring status
-        if self.monitoring_active:
-            self.monitoring_status_label.config(text="Active")
-        else:
-            self.monitoring_status_label.config(text="Inactive")
-        
-        # Update last refresh
-        self.last_refresh_label.config(text=self.last_refresh_time.strftime("%H:%M:%S"))
-        
-        # Update files monitored
-        files_count = len(self.file_monitor.get_recent_files())
-        self.files_monitored_label.config(text=str(files_count))
-        
-        # Update log entries count
-        self.log_entries_label.config(text=str(len(self.all_log_entries)))
-        
-        # Update bounty display
-        bounty_summary = self.bounty_tracker.get_bounty_summary()
-        self.total_bounty_label.config(text=f"{bounty_summary['total_bounty']:,} ISK")
-        self.crab_bounty_label.config(text=f"{bounty_summary['crab_bounty']:,} ISK")
-        
-        if bounty_summary['session_active']:
-            duration = bounty_summary['session_duration']
-            self.session_duration_label.config(text=format_duration(duration.total_seconds()))
-        else:
-            self.session_duration_label.config(text="0s")
-        
-        # Update beacon display
-        active_session = self.beacon_tracker.get_active_session()
-        if active_session:
-            beacon_id = active_session.beacon_id[:8] + "..."
-            self.current_beacon_label.config(text=beacon_id)
-            
-            duration = active_session.get_duration()
-            self.beacon_duration_label.config(text=format_duration(duration.total_seconds()))
-        else:
-            self.current_beacon_label.config(text="None")
-            self.beacon_duration_label.config(text="0s")
-    
-    def refresh_logs(self):
-        """Manually refresh the log display."""
-        self.load_log_files()
-    
-    def clear_display(self):
-        """Clear the log display."""
-        self.log_text.delete(1.0, tk.END)
-        self.all_log_entries = []
-        self.update_status_display()
-    
-    def export_logs(self):
-        """Export current logs to a file."""
-        if not self.all_log_entries:
-            messagebox.showinfo("Info", "No logs to export")
-            return
-        
         try:
-            filename = f"eve_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-            filepath = filedialog.asksaveasfilename(
-                defaultextension=".txt",
-                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
-                initialname=filename
-            )
+            print(f"Updating status display - monitoring_active: {self.monitoring_active}, high_freq: {self.high_freq_var.get()}")
             
-            if filepath:
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    for entry in self.all_log_entries:
-                        f.write(f"{entry}\n")
+            # Update monitoring status
+            if self.monitoring_active:
+                if self.high_freq_var.get():
+                    status_text = "High-Freq Active"
+                else:
+                    status_text = "Normal Active"
+            else:
+                status_text = "Inactive"
+            
+            print(f"Setting monitoring status to: {status_text}")
+            self.monitoring_status_label.config(text=status_text)
+            
+            # Update last refresh
+            if self.last_refresh_time:
+                refresh_text = self.last_refresh_time.strftime("%H:%M:%S")
+            else:
+                refresh_text = "Never"
+            
+            print(f"Setting last refresh to: {refresh_text}")
+            self.last_refresh_label.config(text=refresh_text)
+            
+            # Update files monitored
+            try:
+                recent_files = self.file_monitor.get_recent_files()
+                files_count = len(recent_files) if recent_files else 0
+                print(f"Setting files monitored to: {files_count}")
+                self.files_monitored_label.config(text=str(files_count))
+            except Exception as e:
+                print(f"Error getting files count: {e}")
+                self.files_monitored_label.config(text="0")
+            
+            # Update log entries count
+            entries_count = len(self.all_log_entries) if self.all_log_entries else 0
+            print(f"Setting log entries to: {entries_count}")
+            self.log_entries_label.config(text=str(entries_count))
+            
+            # Update bounty display
+            try:
+                bounty_summary = self.bounty_tracker.get_bounty_summary()
+                self.total_bounty_label.config(text=f"{bounty_summary['total_bounty']:,} ISK")
+                self.crab_bounty_label.config(text=f"{bounty_summary['crab_bounty']:,} ISK")
                 
-                messagebox.showinfo("Success", f"Logs exported to {filepath}")
-        
+                if bounty_summary['session_active']:
+                    duration = bounty_summary['session_duration']
+                    self.session_duration_label.config(text=format_duration(duration.total_seconds()))
+                else:
+                    self.session_duration_label.config(text="0s")
+            except Exception as e:
+                print(f"Error updating bounty display: {e}")
+                self.total_bounty_label.config(text="0 ISK")
+                self.crab_bounty_label.config(text="0 ISK")
+                self.session_duration_label.config(text="0s")
+            
+            # Update beacon display
+            try:
+                active_session = self.beacon_tracker.get_active_session()
+                if active_session:
+                    beacon_id = active_session.beacon_id[:8] + "..."
+                    self.current_beacon_label.config(text=beacon_id)
+                    
+                    duration = active_session.get_duration()
+                    self.beacon_duration_label.config(text=format_duration(duration.total_seconds()))
+                else:
+                    self.current_beacon_label.config(text="None")
+                    self.beacon_duration_label.config(text="0s")
+            except Exception as e:
+                print(f"Error updating beacon display: {e}")
+                self.current_beacon_label.config(text="None")
+                self.beacon_duration_label.config(text="0s")
+            
+            print("Status display update completed successfully")
+                
         except Exception as e:
-            messagebox.showerror("Error", f"Error exporting logs: {e}")
+            print(f"Error in update_status_display: {e}")
+            import traceback
+            traceback.print_exc()
     
     def toggle_monitoring(self):
         """Toggle automatic monitoring on/off."""
         if self.monitoring_var.get():
-            self.start_monitoring()
+            self.start_auto_monitoring()
         else:
-            self.stop_monitoring()
+            self.stop_auto_monitoring()
+    
+    def toggle_high_frequency(self):
+        """Toggle high-frequency monitoring on/off."""
+        if self.high_freq_var.get():
+            if self.monitoring_var.get():
+                self.start_auto_monitoring()
+        else:
+            # If high-frequency is disabled, stop auto-monitoring
+            if self.monitoring_var.get():
+                self.stop_auto_monitoring()
+                # Restart with normal monitoring
+                self.start_monitoring()
     
     def start_monitoring(self):
         """Start automatic monitoring."""
@@ -561,6 +668,92 @@ class MainWindow:
         self.file_monitor.stop_monitoring()
         self.monitoring_active = False
         self.update_status_display()
+    
+    def start_auto_monitoring(self):
+        """Start high-frequency monitoring in a separate thread."""
+        if self.monitoring_thread is None or not self.monitoring_thread.is_alive():
+            self.stop_monitoring_flag = False
+            self.monitoring_thread = threading.Thread(target=self.high_frequency_monitor_loop, daemon=True)
+            self.monitoring_thread.start()
+            self.monitoring_active = True
+            self.update_status_display()
+            print("Auto-monitoring started")
+    
+    def stop_auto_monitoring(self):
+        """Stop high-frequency monitoring."""
+        self.stop_monitoring_flag = True
+        if self.monitoring_thread and self.monitoring_thread.is_alive():
+            self.monitoring_thread.join(timeout=2.0)
+        self.monitoring_active = False
+        self.update_status_display()
+        print("Auto-monitoring stopped")
+    
+    def high_frequency_monitor_loop(self):
+        """High-frequency monitoring loop to detect file changes."""
+        print("High-frequency monitoring loop started")
+        while not self.stop_monitoring_flag:
+            try:
+                time.sleep(1)  # Check every 1 second for high-frequency monitoring
+                
+                if not self.stop_monitoring_flag:
+                    print("Checking for file changes (auto-monitor)...")
+                    
+                    # Get current file sizes and hashes
+                    current_file_sizes = {}
+                    current_file_hashes = {}
+                    for file_path in self.file_monitor.get_recent_files():
+                        if os.path.exists(file_path):
+                            current_file_sizes[file_path] = os.path.getsize(file_path)
+                            current_file_hashes[file_path] = self.calculate_file_hash(file_path)
+                    
+                    # Compare with previous state
+                    changed_files = []
+                    for file_path in current_file_sizes:
+                        if file_path in self.last_file_sizes:
+                            if (current_file_sizes[file_path] != self.last_file_sizes[file_path] or 
+                                current_file_hashes[file_path] != self.last_file_hashes[file_path]):
+                                changed_files.append(file_path)
+                        else:
+                            # New file added
+                            changed_files.append(file_path)
+                    
+                    # Check for deleted files
+                    for file_path in self.last_file_sizes:
+                        if file_path not in current_file_sizes:
+                            changed_files.append(file_path)
+                    
+                    # Update last state
+                    self.last_file_sizes = current_file_sizes
+                    self.last_file_hashes = current_file_hashes
+                    
+                    # If any file changed, refresh logs
+                    if changed_files:
+                        print(f"Changed files detected: {len(changed_files)} - refreshing automatically")
+                        self.root.after(0, self.refresh_logs)
+                        self.root.after(0, self.update_status_display)
+                    else:
+                        print("No changes detected, continuing to monitor...")
+                        # Update status to show we're still checking
+                        self.root.after(0, self.update_status_display)
+            
+            except Exception as e:
+                print(f"High-frequency monitoring loop error: {e}")
+                time.sleep(1)  # Wait a bit before retrying
+    
+    def calculate_file_hash(self, file_path):
+        """Calculate MD5 hash of file content for change detection."""
+        try:
+            if not os.path.exists(file_path):
+                return None
+            
+            hash_md5 = hashlib.md5()
+            with open(file_path, "rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_md5.update(chunk)
+            return hash_md5.hexdigest()
+        except Exception as e:
+            print(f"Error calculating hash for {file_path}: {e}")
+            return None
     
     def start_bounty_session(self):
         """Start a new bounty tracking session."""
@@ -623,5 +816,10 @@ class MainWindow:
     
     def update_display_timer(self):
         """Update display elements that need regular updates."""
-        self.update_status_display()
+        try:
+            self.update_status_display()
+        except Exception as e:
+            print(f"Error in update_display_timer: {e}")
+        
+        # Schedule next update
         self.root.after(1000, self.update_display_timer)  # Update every second
