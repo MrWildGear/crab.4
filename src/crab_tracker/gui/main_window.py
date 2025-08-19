@@ -299,6 +299,8 @@ class MainWindow:
                   style="Info.TButton").grid(row=0, column=1, padx=2)
         ttk.Button(export_frame, text="Debug Session", command=self.show_session_debug_info, 
                   style="Info.TButton").grid(row=0, column=2, padx=2)
+        ttk.Button(export_frame, text="Test Google Forms", command=self.test_google_forms, 
+                  style="Info.TButton").grid(row=0, column=3, padx=2)
         
         # Set up countdown callback
         self.beacon_tracker.set_countdown_callback(self.update_concord_countdown)
@@ -1683,3 +1685,46 @@ class MainWindow:
         
         # Schedule next update
         self.root.after(1000, self.update_display_timer)  # Update every second
+    
+    def test_google_forms(self):
+        """Test Google Forms configuration and connection."""
+        try:
+            # Test configuration loading
+            config_debug = self.google_forms_service.test_config_loading()
+            
+            # Test connection
+            connection_success = self.google_forms_service.test_connection()
+            
+            # Create debug report
+            debug_report = f"Google Forms Configuration Test\n"
+            debug_report += f"=" * 40 + "\n\n"
+            
+            debug_report += f"Environment: {config_debug.get('environment', 'Unknown')}\n"
+            debug_report += f"Config Loaded: {config_debug.get('config_loaded', False)}\n"
+            debug_report += f"Config Keys: {config_debug.get('config_keys', [])}\n"
+            debug_report += f"Form URL: {config_debug.get('form_url', 'None')}\n"
+            debug_report += f"Field Mappings Count: {config_debug.get('field_mappings_count', 0)}\n"
+            debug_report += f"Version: {config_debug.get('version', 'Unknown')}\n"
+            debug_report += f"Last Updated: {config_debug.get('last_updated', 'Unknown')}\n\n"
+            
+            if 'environment' in config_debug and config_debug['environment'] == 'PyInstaller Executable':
+                debug_report += f"Executable Directory: {config_debug.get('executable_dir', 'Unknown')}\n"
+                debug_report += f"Working Directory: {config_debug.get('working_dir', 'Unknown')}\n\n"
+                
+                debug_report += f"Config File Locations:\n"
+                for path, exists in config_debug.get('config_file_exists', {}).items():
+                    debug_report += f"  {path}: {'✓ EXISTS' if exists else '✗ NOT FOUND'}\n"
+                debug_report += "\n"
+            
+            debug_report += f"Connection Test: {'✓ SUCCESS' if connection_success else '✗ FAILED'}\n"
+            
+            if config_debug.get('field_mappings'):
+                debug_report += f"\nField Mappings:\n"
+                for field_name, entry_id in config_debug.get('field_mappings', {}).items():
+                    debug_report += f"  {field_name} -> {entry_id}\n"
+            
+            # Show debug report
+            messagebox.showinfo("Google Forms Test Results", debug_report)
+            
+        except Exception as e:
+            messagebox.showerror("Test Error", f"Error testing Google Forms: {e}")

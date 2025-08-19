@@ -60,7 +60,8 @@ def build_executable(dist_dir):
         '--windowed',
         '--name=CRAB_Tracker',
         '--distpath', str(dist_dir),
-        '--add-data', f'src/resources{os.pathsep}.',
+        '--add-data', f'src/resources/config{os.pathsep}config',
+        '--add-data', f'src/resources/build{os.pathsep}build',
         '--hidden-import=tkinter',
         '--hidden-import=requests',
         '--hidden-import=logging',
@@ -74,6 +75,7 @@ def build_executable(dist_dir):
         '--hidden-import=uuid',
         '--hidden-import=dataclasses',
         '--hidden-import=typing',
+        '--hidden-import=sys',
         'src/crab_tracker/main.py'
     ]
     

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crab-tracker"
-version = "1.0.0"
+version = "0.4.0"
 description = "EVE Online Log Reader and Beacon Analysis Tool"
 readme = "README.md"
 license = { text = "MIT" }
@@ -40,9 +40,9 @@ dev = [
 crab-tracker = "crab_tracker.main:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/crab-tracker"
-Repository = "https://github.com/yourusername/crab-tracker.git"
-Issues = "https://github.com/yourusername/crab-tracker/issues"
+Homepage = "https://github.com/MrWildGear/crab.4"
+Repository = "https://github.com/MrWildGear/crab.4"
+Issues = "https://github.com/MrWildGear/crab.4/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
