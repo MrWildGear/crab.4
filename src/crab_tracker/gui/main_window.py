@@ -297,11 +297,49 @@ class MainWindow:
         ttk.Button(export_frame, text="Export Beacon Data", command=self.export_beacon_data).grid(row=0, column=0, padx=2)
         ttk.Button(export_frame, text="Update Loot from Clipboard", command=self.update_beacon_loot_from_clipboard, 
                   style="Info.TButton").grid(row=0, column=1, padx=2)
+        ttk.Button(export_frame, text="Debug Session", command=self.show_session_debug_info, 
+                  style="Info.TButton").grid(row=0, column=2, padx=2)
         
         # Set up countdown callback
         self.beacon_tracker.set_countdown_callback(self.update_concord_countdown)
         self.beacon_tracker.set_beacon_started_callback(self.on_beacon_started)
         self.beacon_tracker.set_beacon_reset_callback(self.on_beacon_reset)
+    
+    def show_session_debug_info(self):
+        """Show debug information about the current session state."""
+        try:
+            active_session = self.beacon_tracker.get_active_session()
+            if not active_session:
+                messagebox.showinfo("Debug Info", "No active beacon session found.")
+                return
+            
+            debug_info = f"Session Debug Information:\n"
+            debug_info += f"Beacon ID: {active_session.beacon_id}\n"
+            debug_info += f"Duration: {active_session.get_duration()}\n"
+            debug_info += f"Rogue Drone Data: {active_session.rogue_drone_data} units\n"
+            debug_info += f"Loot Details Count: {len(active_session.loot_details)}\n"
+            
+            if active_session.loot_details:
+                debug_info += f"\nLoot Details:\n"
+                for i, loot in enumerate(active_session.loot_details, 1):
+                    debug_info += f"{i}. {loot}\n"
+            else:
+                debug_info += f"\nLoot Details: None"
+            
+            # Check clipboard
+            try:
+                clipboard_text = self.root.clipboard_get()
+                if clipboard_text and clipboard_text.strip():
+                    debug_info += f"\n\nClipboard Content (first 100 chars):\n{clipboard_text[:100]}..."
+                else:
+                    debug_info += f"\n\nClipboard: Empty or whitespace only"
+            except tk.TclError:
+                debug_info += f"\n\nClipboard: Access error"
+            
+            messagebox.showinfo("Session Debug Info", debug_info)
+            
+        except Exception as e:
+            messagebox.showerror("Debug Error", f"Error getting debug info: {e}")
     
     def apply_dark_theme(self):
         """Apply dark theme to the application."""
@@ -1452,17 +1490,31 @@ class MainWindow:
             # Get session data for submission
             active_session = self.beacon_tracker.get_active_session()
             if active_session:
-                # Try to read clipboard loot data automatically
+                # First check if the session already has loot data from previous clipboard updates
                 clipboard_loot_data = None
-                try:
-                    clipboard_text = self.root.clipboard_get()
-                    if clipboard_text and clipboard_text.strip():
-                        clipboard_loot_data = self._parse_loot_text(clipboard_text)
-                        print(f"Clipboard loot data parsed: {clipboard_loot_data['total_value']:,.2f} ISK")
-                except tk.TclError:
-                    print("No clipboard data found for loot parsing")
-                except Exception as e:
-                    print(f"Error parsing clipboard loot: {e}")
+                
+                # If session doesn't have loot details, try to read from clipboard
+                if not active_session.loot_details or len(active_session.loot_details) == 0:
+                    try:
+                        clipboard_text = self.root.clipboard_get()
+                        if clipboard_text and clipboard_text.strip():
+                            clipboard_loot_data = self._parse_loot_text(clipboard_text)
+                            print(f"Clipboard loot data parsed: {clipboard_loot_data['total_value']:,.2f} ISK")
+                            
+                            # Update the session with this loot data so it's stored for future use
+                            if clipboard_loot_data and clipboard_loot_data['all_loot']:
+                                active_session.rogue_drone_data = clipboard_loot_data['rogue_drone_data']
+                                active_session.loot_details.clear()
+                                for loot in clipboard_loot_data['all_loot']:
+                                    active_session.loot_details.append(f"{loot['name']} x{loot['amount']} ({loot['value']:,.0f} ISK)")
+                                
+                                print(f"Session updated with clipboard loot data")
+                    except tk.TclError:
+                        print("No clipboard data found for loot parsing")
+                    except Exception as e:
+                        print(f"Error parsing clipboard loot: {e}")
+                else:
+                    print(f"Session already has loot data: {len(active_session.loot_details)} items")
                 
                 # Prepare session data with clipboard loot if available
                 session_data = {
@@ -1473,11 +1525,16 @@ class MainWindow:
                     'Loot Details': ', '.join(active_session.loot_details) if active_session.loot_details else 'None'
                 }
                 
-                # Add clipboard loot data if available
+                # Add clipboard loot data if available (either from current clipboard or session)
                 if clipboard_loot_data and clipboard_loot_data['all_loot']:
+                    # Add clipboard loot data to existing fields to ensure submission
                     session_data['Clipboard Loot Total Value'] = f"{clipboard_loot_data['total_value']:,.2f} ISK"
                     session_data['Clipboard Rogue Drone Data'] = str(clipboard_loot_data['rogue_drone_data'])
                     session_data['Clipboard Loot Items'] = str(len(clipboard_loot_data['all_loot']))
+                    
+                    # Also append clipboard loot to the Loot Details field to ensure it gets submitted
+                    clipboard_loot_summary = f" | Clipboard: {clipboard_loot_data['total_value']:,.2f} ISK, {clipboard_loot_data['rogue_drone_data']} RDD, {len(clipboard_loot_data['all_loot'])} items"
+                    session_data['Loot Details'] += clipboard_loot_summary
                     
                     # Show loot summary to user
                     loot_summary = f"Clipboard Loot Found:\n"
@@ -1487,15 +1544,32 @@ class MainWindow:
                     loot_summary += "This loot data will be included in your submission."
                     
                     messagebox.showinfo("Loot Data Found", loot_summary)
+                elif active_session.loot_details and len(active_session.loot_details) > 0:
+                    # Session has loot data from previous updates
+                    print(f"Using session loot data: {len(active_session.loot_details)} items")
+                    
+                    # Show session loot summary to user
+                    loot_summary = f"Session Loot Data Found:\n"
+                    loot_summary += f"Rogue Drone Data: {active_session.rogue_drone_data} units\n"
+                    loot_summary += f"Items: {len(active_session.loot_details)}\n\n"
+                    loot_summary += "This loot data will be included in your submission."
+                    
+                    messagebox.showinfo("Session Loot Data Found", loot_summary)
                 
                 # Submit to Google Forms
+                print(f"Submitting session data to Google Forms...")
+                print(f"Session data keys: {list(session_data.keys())}")
+                print(f"Loot Details field content: {session_data['Loot Details']}")
+                
                 success = self.google_forms_service.submit_beacon_session(session_data)
                 
                 if success:
+                    print(f"Google Forms submission successful")
                     messagebox.showinfo("Success", 
                                       "CRAB session completed and data submitted to Google Forms!\n\n"
                                       "Session data has been recorded and submitted.")
                 else:
+                    print(f"Google Forms submission failed")
                     messagebox.showwarning("Submission Warning", 
                                          "CRAB session completed but failed to submit to Google Forms.\n\n"
                                          "You can manually submit using the 'Submit to Google Forms' button.")

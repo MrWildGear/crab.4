@@ -5,9 +5,12 @@
     "Total Duration": "entry.66008066",
     "Total CRAB Bounty": "entry.257705337",
     "Rogue Drone Data Amount": "entry.1906365497",
-    "Loot Details": "entry.1769084685"
+    "Loot Details": "entry.1769084685",
+    "Clipboard Loot Total Value": "entry.1234567890",
+    "Clipboard Rogue Drone Data": "entry.0987654321",
+    "Clipboard Loot Items": "entry.1122334455"
   },
-  "description": "Simplified configuration for EVE Online CRAB Beacon Session Google Form - 5 essential fields only",
-  "version": "2.0",
+  "description": "Enhanced configuration for EVE Online CRAB Beacon Session Google Form - includes clipboard loot data fields",
+  "version": "2.1",
   "last_updated": "2025-01-15"
 }
