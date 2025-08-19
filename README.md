@@ -1,194 +1,232 @@
-# EVE Online Log Reader
+# 🦀 CRAB Tracker
 
-A powerful Python application for monitoring and reading EVE Online game logs in real-time with advanced filtering and dark mode interface.
+**EVE Online Log Reader & Beacon Analysis Tool**
 
-## 🌟 Features
+A comprehensive Python application for monitoring EVE Online game logs, tracking CONCORD Rogue Analysis Beacon sessions, and analyzing CRAB bounty data with real-time monitoring and Google Forms integration.
 
-### **Real-Time Log Monitoring**
-- **High-frequency monitoring** (1-second intervals) for instant updates
-- **Content hash detection** - catches all file changes reliably
-- **Multi-file monitoring** - monitors all log files simultaneously
-- **Automatic refresh** when changes are detected
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/yourusername/crab-tracker)
 
-### **Smart Log Filtering**
-- **UTC timestamp recognition** from EVE log filenames (`YYYYMMDD_HHMMSS_characterID.txt`)
-- **Recent logs only** - configurable "max days old" filter
-- **File limit control** - set maximum number of files to display
-- **Performance optimized** - only processes recent, relevant logs
+## ✨ Features
 
-### **User Interface**
-- **Dark mode theme** - easy on the eyes for long gaming sessions
-- **Real-time status updates** - shows monitoring status and last refresh time
-- **Source file tracking** - each log entry shows which file it came from
-- **Responsive design** - handles large log files efficiently
+### 🎯 **Core Functionality**
+- **Real-time Log Monitoring** - Automatically detects and monitors EVE Online log files
+- **Smart File Filtering** - Only processes recent log files based on configurable time limits
+- **Content Hash Detection** - Reliable change detection using MD5 hashing
+- **Multi-file Support** - Monitors multiple log files simultaneously
 
-### **Advanced Features**
-- **Export functionality** - save filtered logs to text files
-- **Debug tools** - file modification times and content hash information
-- **Test log creation** - for testing and debugging
-- **Manual refresh** - immediate refresh when needed
+### 🎮 **EVE Online Specific**
+- **Beacon Tracking** - Tracks CONCORD Rogue Analysis Beacon sessions
+- **Bounty Monitoring** - Monitors and calculates bounty earnings
+- **CRAB Sessions** - Special tracking for CRAB-specific bounty sessions
+- **Log Parsing** - Intelligent parsing of EVE Online log formats
 
-## 🚀 Installation
+### 📊 **Data Management**
+- **Export Functions** - Export logs and session data to CSV/TXT formats
+- **Google Forms Integration** - Submit beacon session data to Google Forms
+- **Session Management** - Track and manage multiple gaming sessions
+- **Data Visualization** - Real-time display of tracking information
+
+## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.7 or higher
-- Windows (tested on Windows 10/11)
+- **Python 3.8+** (Windows 10/11 optimized)
+- **EVE Online** installed and generating log files
 
-### Quick Start
+### Installation
+
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/eve-log-reader.git
-   cd eve-log-reader
+   git clone https://github.com/yourusername/crab-tracker.git
+   cd crab-tracker
    ```
 
 2. **Install dependencies**
    ```bash
-   pip install -r Src/requirements.txt
+   pip install -r requirements.txt
    ```
 
 3. **Run the application**
    ```bash
-   python Src/eve_log_reader.py
+   python src/scripts/run.py
    ```
 
 ### Alternative Launch Methods
-- **Batch file**: Double-click `Src\run_eve_log_reader.bat`
-- **Direct execution**: Navigate to `Src` folder and run `python eve_log_reader.py`
+- **Direct execution**: `python src/crab_tracker/main.py`
+- **Package installation**: `pip install -e .` then `crab-tracker`
 
-## 📁 Project Structure
+## 🏗️ Project Structure
 
 ```
-eve-log-reader/
-├── Src/                          # Source code directory
-│   ├── eve_log_reader.py         # Main application
-│   ├── README.md                 # Detailed documentation
-│   ├── test_app.py               # Testing and debugging tools
-│   ├── run_eve_log_reader.bat    # Windows batch launcher
-│   └── requirements.txt          # Python dependencies
-├── README.md                     # This file (GitHub main page)
-└── .gitignore                   # Git ignore file
+crab-tracker/
+├── src/                           # Source code
+│   ├── crab_tracker/             # Main package
+│   │   ├── gui/                  # User interface components
+│   │   ├── core/                 # Core functionality modules
+│   │   ├── services/             # External services integration
+│   │   └── utils/                # Utility functions
+│   ├── scripts/                  # Build and utility scripts
+│   └── resources/                # Configuration and resources
+├── tests/                        # Comprehensive test suite
+├── docs/                         # Detailed documentation
+├── requirements.txt               # Runtime dependencies
+├── requirements-dev.txt           # Development dependencies
+├── pyproject.toml                # Modern Python configuration
+└── setup.py                      # Package setup
 ```
-
-## 🎮 How It Works
-
-### **EVE Log Detection**
-The app automatically finds your EVE Online log directory:
-- **Primary**: `~/Documents/EVE/logs/Gamelogs/`
-- **Fallback**: `~/Documents/EVE/logs/`
-- **Alternative**: `~/AppData/Local/CCP/EVE/logs/`
-
-### **Log File Format Support**
-- **EVE format**: `YYYYMMDD_HHMMSS_characterID.txt`
-- **Standard formats**: `.log`, `.txt`, `.xml`
-- **Timestamp extraction** from both filenames and content
-
-### **Change Detection System**
-1. **Content hashing** (MD5) - most reliable method
-2. **Modification time** - secondary detection
-3. **File size** - tertiary detection
-4. **Real-time monitoring** every 1 second
 
 ## ⚙️ Configuration
 
-### **Filter Settings**
-- **Max days old**: 1-30 days (default: 1 day)
-- **Max files to show**: 5-50 files (default: 10 files)
-- **High-frequency monitoring**: Enable/disable 1-second monitoring
-- **Content hash detection**: Enable/disable hash-based change detection
+### Google Forms Integration
+Configure beacon session data submission in `src/resources/config/google_forms.json`:
 
-### **Interface Options**
-- **Dark theme**: Always enabled for gaming comfort
-- **Font size**: Monospace font for log readability
-- **Status display**: Real-time monitoring information
+```json
+{
+  "form_url": "https://docs.google.com/forms/d/e/.../formResponse",
+  "field_mappings": {
+    "Beacon ID": "entry.1520906809",
+    "Total Duration": "entry.66008066",
+    "Total CRAB Bounty": "entry.257705337"
+  }
+}
+```
 
-## 🔧 Usage
+### Log Directory Settings
+- **Auto-detection**: Automatically finds EVE Online log directories
+- **Manual selection**: Use the Browse button to select custom directories
+- **Filter settings**: Configure maximum file age and count limits
 
-### **Basic Operation**
-1. **Launch the app** - it automatically finds your EVE logs
-2. **Adjust filters** - set how many days old and files to show
-3. **Monitor in real-time** - logs update automatically when changes occur
-4. **Export when needed** - save filtered logs to external files
+## 🎮 Usage
 
-### **Advanced Features**
-- **Show File Times**: View detailed modification times for debugging
-- **Show File Hashes**: Monitor content hash changes
-- **Create Test Log**: Generate test files for testing
-- **Manual Refresh**: Force immediate refresh
+### Basic Operation
+1. **Launch the application**
+2. **Select log directory** (auto-detected by default)
+3. **Configure filters** (days old, max files)
+4. **Start monitoring** (enabled by default)
+5. **View real-time updates**
 
-### **Keyboard Shortcuts**
-- **Ctrl+A**: Select all text
-- **Ctrl+C**: Copy selected text
-- **Ctrl+F**: Find in logs (if implemented)
-- **F5**: Manual refresh
+### Beacon Tracking
+1. **Start a gaming session**
+2. **Activate a CONCORD Rogue Analysis Beacon**
+3. **Monitor progress** in real-time
+4. **Complete the beacon** to capture session data
+5. **Export or submit data** as needed
+
+### Bounty Monitoring
+1. **Start bounty session** when beginning gameplay
+2. **Monitor earnings** in real-time
+3. **Track CRAB sessions** separately
+4. **Export session data** for analysis
+
+## 🔨 Building
+
+### Development Build
+```bash
+# Install development dependencies
+pip install -r requirements-dev.txt
+
+# Run tests
+pytest
+
+# Build executable
+python src/scripts/build.py
+```
+
+### Production Build
+```bash
+# Use the batch script (Windows)
+src\scripts\build_anti_malware.bat
+
+# Or use PyInstaller directly
+pyinstaller --onefile --windowed src/crab_tracker/main.py
+```
+
+## 🧪 Development
+
+### Code Quality
+- **Formatting**: [Black](https://black.readthedocs.io/) (88 character line length)
+- **Linting**: [Flake8](https://flake8.pycqa.org/)
+- **Type checking**: [MyPy](https://mypy-lang.org/)
+- **Testing**: [Pytest](https://docs.pytest.org/) with coverage
+
+### Testing
+```bash
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=crab_tracker
+
+# Run specific test file
+pytest tests/test_time_utils.py
+```
+
+### Adding Features
+1. **Create feature branch**
+2. **Implement functionality** in appropriate module
+3. **Add tests** in `tests/` directory
+4. **Update documentation**
+5. **Submit pull request**
+
+## 📚 Documentation
+
+- **[Main Documentation](docs/README.md)** - Comprehensive usage guide
+- **[Installation Guide](docs/INSTALLATION.md)** - Detailed setup instructions
+- **[Building Guide](docs/BUILDING.md)** - Build and deployment guide
+- **[API Reference](docs/API.md)** - Developer API documentation
 
 ## 🐛 Troubleshooting
 
-### **Common Issues**
+### Common Issues
+- **Log directory not found**: Check EVE Online installation path
+- **Permission errors**: Run as administrator if needed
+- **Import errors**: Ensure all dependencies are installed
+- **Build failures**: Check PyInstaller installation
 
-#### **No Logs Found**
-- Verify EVE Online is installed and has generated logs
-- Check the log directory path in the app
-- Ensure log files have `.txt`, `.log`, or `.xml` extensions
-
-#### **Auto-refresh Not Working**
-- Enable "High-frequency monitoring (1s)" checkbox
-- Check "Content hash detection" is enabled
-- Verify log files are being updated by EVE Online
-- Use "Show File Times" to debug file modification issues
-
-#### **Performance Issues**
-- Reduce "Max files to show" setting
-- Reduce "Max days old" setting
-- Disable high-frequency monitoring if not needed
-
-### **Debug Tools**
-- **Console output**: Check terminal/console for detailed logging
-- **File Times**: Shows when files were last modified
-- **File Hashes**: Shows content hash changes
-- **Test Log**: Creates test files to verify monitoring
+### Logs
+Application logs are stored in the `logs/` directory:
+- `crab_tracker.log`: Main application log
+- `session_*.log`: Individual session logs
 
 ## 🤝 Contributing
 
-Contributions are welcome! Here are some ways to help:
+We welcome contributions! Please see our contributing guidelines for:
+- Code style requirements
+- Testing requirements
+- Pull request process
+- Issue reporting
 
-### **Bug Reports**
-- Use GitHub Issues to report bugs
-- Include detailed steps to reproduce
-- Attach relevant log files or screenshots
+## 📄 License
 
-### **Feature Requests**
-- Suggest new features via GitHub Issues
-- Describe the use case and benefits
-- Consider implementation complexity
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
-### **Code Contributions**
-- Fork the repository
-- Create a feature branch
-- Submit a pull request with clear description
+## 🆘 Support
 
-### **Documentation**
-- Improve README files
-- Add code comments
-- Create usage examples
+- **Issues**: [GitHub Issues](https://github.com/yourusername/crab-tracker/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/yourusername/crab-tracker/discussions)
+- **Documentation**: [Documentation](docs/README.md)
+- **Community**: EVE Online community forums
 
-## 📝 License
+## 📈 Changelog
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+### Version 1.0.0
+- Initial release with modern Python project structure
+- Core log monitoring functionality
+- Beacon tracking system
+- Bounty monitoring
+- Google Forms integration
+- Comprehensive test suite
+- Modern development tools and configuration
 
 ## 🙏 Acknowledgments
 
-- **EVE Online** community for log format insights
-- **Python Tkinter** for the GUI framework
-- **Open source contributors** who inspired this project
-
-## 📞 Support
-
-- **GitHub Issues**: For bugs and feature requests
-- **Discussions**: For general questions and help
-- **Wiki**: For detailed documentation (if created)
+- **EVE Online Community** - For feedback and testing
+- **Python Community** - For excellent tools and libraries
+- **Open Source Contributors** - For making this project possible
 
 ---
 
-**Happy EVE Online log monitoring!** 🚀
+**Made with ❤️ for the EVE Online community**
 
-*Built with Python and designed for gamers who need real-time log insights.*
+*Fly safe, capsuleer!*

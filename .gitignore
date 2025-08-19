@@ -20,8 +20,6 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
-*.md
-*.csv
 
 # PyInstaller
 *.manifest
@@ -124,14 +122,25 @@ dmypy.json
 ehthumbs.db
 Thumbs.db
 
-# EVE Online specific
-# Uncomment if you want to exclude actual log files
+# CRAB Tracker specific
+# Application logs
+logs/
+*.log
+
+# Export files
+exports/
+
+# EVE Online log files (uncomment if you want to exclude actual log files)
 # *.txt
 # *.log
 # *.xml
 
-# Project specific
-# Keep these files in the repository
-# !Src/*.txt
-# !Src/*.log
-# !Src/*.xml
+# Project specific - Keep these files in the repository
+# !src/resources/config/*.json
+# !src/resources/build/*.txt
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup

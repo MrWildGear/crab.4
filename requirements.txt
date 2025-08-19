@@ -1,0 +1,13 @@
+# CRAB Tracker - Dependencies
+# Core application dependencies
+
+# HTTP requests for Google Forms integration
+requests>=2.25.0
+
+# Build dependencies (install separately for building)
+# pyinstaller>=5.0.0
+
+# Note: The following are built-in Python modules and don't need to be installed:
+# - tkinter (GUI framework)
+# - datetime, os, pathlib, threading, hashlib, glob, re, time
+# - logging, csv, json, uuid, dataclasses, typing
