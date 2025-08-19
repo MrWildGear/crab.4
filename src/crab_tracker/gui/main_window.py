@@ -128,6 +128,17 @@ class MainWindow:
         ttk.Button(button_frame, text="Clear Display", command=self.clear_display).grid(row=0, column=2, padx=5)
         ttk.Button(button_frame, text="Export Logs", command=self.export_logs).grid(row=0, column=3, padx=5)
         
+        # Test and debug buttons
+        test_frame = ttk.LabelFrame(control_frame, text="Testing & Debug Tools")
+        test_frame.grid(row=3, column=0, columnspan=4, sticky="ew", padx=5, pady=5)
+        
+        ttk.Button(test_frame, text="Create Test Log", command=self.create_test_log, 
+                  style="Info.TButton").grid(row=0, column=0, padx=2, pady=2)
+        ttk.Button(test_frame, text="Add Test Bounty", command=self.add_test_bounty, 
+                  style="Info.TButton").grid(row=0, column=1, padx=2, pady=2)
+        ttk.Button(test_frame, text="Parse Clipboard Loot", command=self.parse_clipboard_loot, 
+                  style="Info.TButton").grid(row=0, column=2, padx=2, pady=2)
+        
         # Monitoring controls
         ttk.Label(button_frame, text="Auto-monitor:").grid(row=0, column=4, padx=5, pady=2)
         ttk.Checkbutton(button_frame, text="", variable=self.monitoring_var, 
@@ -222,21 +233,71 @@ class MainWindow:
     
     def create_beacon_panel(self):
         """Create the beacon tracking panel."""
-        beacon_frame = ttk.LabelFrame(self.root, text="Beacon Tracking")
+        beacon_frame = ttk.LabelFrame(self.root, text="CONCORD Rogue Analysis Beacon")
         beacon_frame.grid(row=3, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
         
-        # Beacon status
-        ttk.Label(beacon_frame, text="Current Beacon:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
-        self.current_beacon_label = ttk.Label(beacon_frame, text="None")
-        self.current_beacon_label.grid(row=0, column=1, sticky="w", padx=5, pady=2)
+        # CONCORD status display
+        concord_frame = ttk.Frame(beacon_frame)
+        concord_frame.grid(row=0, column=0, columnspan=4, sticky="ew", padx=5, pady=5)
         
-        ttk.Label(beacon_frame, text="Beacon Duration:").grid(row=0, column=2, sticky="w", padx=5, pady=2)
-        self.beacon_duration_label = ttk.Label(beacon_frame, text="0s")
-        self.beacon_duration_label.grid(row=0, column=3, sticky="w", padx=5, pady=2)
+        # Status and countdown in same row
+        ttk.Label(concord_frame, text="Status:").grid(row=0, column=0, sticky="w", padx=(0, 5))
+        self.concord_status_var = tk.StringVar(value="Status: Inactive")
+        self.concord_status_label = ttk.Label(concord_frame, textvariable=self.concord_status_var)
+        self.concord_status_label.grid(row=0, column=1, sticky="w", padx=(0, 20))
         
-        # Beacon controls
-        ttk.Button(beacon_frame, text="Submit to Google Forms", command=self.submit_to_google_forms).grid(row=1, column=0, columnspan=2, padx=5, pady=2)
-        ttk.Button(beacon_frame, text="Export Beacon Data", command=self.export_beacon_data).grid(row=1, column=2, columnspan=2, padx=5, pady=2)
+        # Countdown timer with color
+        self.concord_countdown_var = tk.StringVar(value="Countdown: --:--")
+        self.concord_countdown_label = tk.Label(concord_frame, textvariable=self.concord_countdown_var,
+                                              font=("Consolas", 10, "bold"), foreground="#ffff00",
+                                              background="#2b2b2b", relief="flat")
+        self.concord_countdown_label.grid(row=0, column=2, sticky="w", padx=(0, 20))
+        
+        # Link time display
+        self.concord_time_var = tk.StringVar(value="Link Time: Not started")
+        concord_time_label = ttk.Label(concord_frame, textvariable=self.concord_time_var)
+        concord_time_label.grid(row=0, column=3, sticky="w", padx=(0, 20))
+        
+        # Beacon ID display
+        self.beacon_id_var = tk.StringVar(value="Beacon ID: None")
+        beacon_id_label = ttk.Label(concord_frame, textvariable=self.beacon_id_var,
+                                   font=("Consolas", 8), foreground="#888888")
+        beacon_id_label.grid(row=1, column=0, columnspan=4, sticky="w", padx=(0, 20), pady=(5, 0))
+        
+        # CONCORD control buttons
+        control_frame = ttk.Frame(beacon_frame)
+        control_frame.grid(row=1, column=0, columnspan=4, sticky="ew", padx=5, pady=5)
+        
+        ttk.Button(control_frame, text="Reset CONCORD Tracking", command=self.reset_concord_tracking).grid(row=0, column=0, padx=2)
+        ttk.Button(control_frame, text="Copy Beacon ID", command=self.copy_beacon_id).grid(row=0, column=1, padx=2)
+        ttk.Button(control_frame, text="View Beacon Sessions", command=self.view_beacon_sessions).grid(row=0, column=2, padx=2)
+        
+        # Test buttons for debugging
+        test_frame = ttk.LabelFrame(beacon_frame, text="Debug Tools")
+        test_frame.grid(row=2, column=0, columnspan=4, sticky="ew", padx=5, pady=5)
+        
+        ttk.Button(test_frame, text="Test Link Start", command=self.test_concord_link_start).grid(row=0, column=0, padx=2, pady=2)
+        ttk.Button(test_frame, text="Test Link Complete", command=self.test_concord_link_complete).grid(row=0, column=1, padx=2, pady=2)
+        ttk.Button(test_frame, text="Test CONCORD Detection", command=self.test_concord_detection, 
+                  style="Info.TButton").grid(row=0, column=2, padx=2, pady=2)
+        
+        # CRAB session control buttons
+        crab_frame = ttk.LabelFrame(beacon_frame, text="CRAB Session Controls")
+        crab_frame.grid(row=3, column=0, columnspan=4, sticky="ew", padx=5, pady=5)
+        
+        ttk.Button(crab_frame, text="End CRAB Failed", command=self.end_crab_failed, 
+                  style="Danger.TButton").grid(row=0, column=0, padx=2, pady=2)
+        ttk.Button(crab_frame, text="Submit Data", command=self.end_crab_submit, 
+                  style="Success.TButton").grid(row=0, column=1, padx=2, pady=2)
+        
+        # Data export buttons
+        export_frame = ttk.Frame(beacon_frame)
+        export_frame.grid(row=4, column=0, columnspan=4, sticky="ew", padx=5, pady=5)
+        
+        ttk.Button(export_frame, text="Export Beacon Data", command=self.export_beacon_data).grid(row=0, column=0, padx=2)
+        
+        # Set up countdown callback
+        self.beacon_tracker.set_countdown_callback(self.update_concord_countdown)
     
     def apply_dark_theme(self):
         """Apply dark theme to the application."""
@@ -277,6 +338,44 @@ class MainWindow:
                  background=[('active', button_active), ('pressed', select_bg)],
                  foreground=[('active', fg_color), ('pressed', fg_color)],
                  bordercolor=[('active', highlight_bg), ('pressed', highlight_bg)])
+        
+        # Configure special button styles
+        style.configure("Danger.TButton", 
+                       background="#8B0000",  # Dark red
+                       foreground=fg_color,
+                       borderwidth=1,
+                       focuscolor="none",
+                       relief="flat",
+                       bordercolor="#FF0000")
+        style.map("Danger.TButton",
+                 background=[('active', "#A00000"), ('pressed', "#600000")],
+                 foreground=[('active', fg_color), ('pressed', fg_color)],
+                 bordercolor=[('active', "#FF4444"), ('pressed', "#CC0000")])
+        
+        style.configure("Success.TButton", 
+                       background="#006400",  # Dark green
+                       foreground=fg_color,
+                       borderwidth=1,
+                       focuscolor="none",
+                       relief="flat",
+                       bordercolor="#00FF00")
+        style.map("Success.TButton",
+                 background=[('active', "#008000"), ('pressed', "#004000")],
+                 foreground=[('active', fg_color), ('pressed', fg_color)],
+                 bordercolor=[('active', "#44FF44"), ('pressed', "#00CC00")])
+        
+        # Configure Info button style
+        style.configure("Info.TButton", 
+                       background="#0066CC",  # Dark blue
+                       foreground=fg_color,
+                       borderwidth=1,
+                       focuscolor="none",
+                       relief="flat",
+                       bordercolor="#3399FF")
+        style.map("Info.TButton",
+                 background=[('active', "#0077DD"), ('pressed', "#0055AA")],
+                 foreground=[('active', fg_color), ('pressed', fg_color)],
+                 bordercolor=[('active', "#55AAFF"), ('pressed', "#2277CC")])
         
         # Configure entry widgets - simplified approach
         style.configure("TEntry", 
@@ -470,6 +569,248 @@ class MainWindow:
         self.all_log_entries = []
         self.update_status_display()
     
+    def create_test_log(self):
+        """Create a test log file to test auto-refresh functionality."""
+        try:
+            # Get the current log directory
+            log_dir = self.log_dir_var.get()
+            if not log_dir or not os.path.exists(log_dir):
+                messagebox.showerror("Error", "Please select a valid log directory first.")
+                return
+            
+            # Create a test log file with current timestamp
+            now = datetime.now()
+            timestamp_str = now.strftime("%Y%m%d_%H%M%S")
+            test_filename = f"{timestamp_str}_99999999_test.txt"
+            test_file_path = os.path.join(log_dir, test_filename)
+            
+            # Create test log content
+            test_content = f"{now.strftime('%Y-%m-%d %H:%M:%S')} [TEST] Auto-refresh test log entry\n"
+            test_content += f"{now.strftime('%Y-%m-%d %H:%M:%S')} [TEST] This is a test log to verify auto-refresh\n"
+            test_content += f"{now.strftime('%Y-%m-%d %H:%M:%S')} [TEST] File created at: {now}\n"
+            test_content += f"{now.strftime('%Y-%m-%d %H:%M:%S')} [TEST] Testing beacon tracking functionality\n"
+            test_content += f"{now.strftime('%Y-%m-%d %H:%M:%S')} [TEST] Testing bounty monitoring system\n"
+            
+            with open(test_file_path, 'w', encoding='utf-8') as f:
+                f.write(test_content)
+            
+            print(f"Created test log: {test_filename}")
+            messagebox.showinfo("Test Log Created", 
+                              f"Test log file created successfully!\n\n"
+                              f"Filename: {test_filename}\n"
+                              f"Location: {log_dir}\n\n"
+                              f"The auto-monitor should detect this file and refresh automatically.")
+            
+            # Wait a moment then refresh to show the new file
+            self.root.after(2000, self.refresh_logs)
+            
+        except Exception as e:
+            print(f"Error creating test log: {e}")
+            messagebox.showerror("Error", f"Error creating test log: {str(e)}")
+    
+    def add_test_bounty(self):
+        """Test function to add a test bounty for testing."""
+        try:
+            # Check if bounty session is active
+            bounty_summary = self.bounty_tracker.get_bounty_summary()
+            if not bounty_summary['session_active']:
+                messagebox.showwarning("Bounty Session Required", 
+                                     "Bounty session must be active to add bounties.\n\n"
+                                     "Please start a bounty session first.")
+                return
+            
+            # Create a test bounty entry
+            test_timestamp = datetime.now()
+            test_isk = 50000  # 50k ISK test bounty
+            test_source = "TEST_BOUNTY"
+            
+            # Import BountyEntry class
+            from ..core.bounty_tracker import BountyEntry
+            
+            # Create the bounty entry object
+            bounty_entry = BountyEntry(
+                timestamp=test_timestamp,
+                amount=test_isk,
+                source=test_source,
+                target="Test Target",
+                session_id=self.bounty_tracker._get_current_session_id()
+            )
+            
+            # Add the test bounty
+            self.bounty_tracker.add_bounty_entry(bounty_entry)
+            
+            print(f"Test bounty added: {test_isk:,} ISK")
+            messagebox.showinfo("Test Bounty Added", 
+                              f"Test bounty added successfully!\n\n"
+                              f"Amount: {test_isk:,} ISK\n"
+                              f"Source: {test_source}\n"
+                              f"Time: {test_timestamp.strftime('%H:%M:%S')}\n\n"
+                              f"Check the bounty display to see the updated total.")
+            
+            # Update the display
+            self.update_status_display()
+            
+        except Exception as e:
+            print(f"Error adding test bounty: {e}")
+            messagebox.showerror("Error", f"Error adding test bounty: {str(e)}")
+    
+    def parse_clipboard_loot(self):
+        """Parse loot data from clipboard text for enhanced loot processing."""
+        try:
+            # Get clipboard content
+            try:
+                clipboard_text = self.root.clipboard_get()
+            except tk.TclError:
+                messagebox.showwarning("No Clipboard Data", 
+                                     "No data found in clipboard.\n\n"
+                                     "Please copy loot data from EVE Online first.")
+                return
+            
+            if not clipboard_text.strip():
+                messagebox.showwarning("Empty Clipboard", 
+                                     "Clipboard appears to be empty.\n\n"
+                                     "Please copy loot data from EVE Online first.")
+                return
+            
+            # Parse the loot data
+            loot_data = self._parse_loot_text(clipboard_text)
+            
+            if not loot_data['all_loot']:
+                messagebox.showwarning("No Loot Found", 
+                                     "No valid loot data found in clipboard.\n\n"
+                                     "Please ensure you copied loot data from EVE Online.")
+                return
+            
+            # Show loot analysis results
+            self._show_loot_analysis(loot_data)
+            
+        except Exception as e:
+            print(f"Error parsing clipboard loot: {e}")
+            messagebox.showerror("Error", f"Error parsing clipboard loot: {str(e)}")
+    
+    def _parse_loot_text(self, clipboard_text):
+        """Parse loot data from text format."""
+        loot_data = {
+            'rogue_drone_data': 0,
+            'rogue_drone_data_value': 0,
+            'total_value': 0,
+            'all_loot': []
+        }
+        
+        try:
+            lines = clipboard_text.strip().split('\n')
+            
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Parse loot line format:
+                # Item Name        Amount    Category    Volume    Value
+                # Example: Rogue Drone Infestation Data        1229        Rogue Drone Analysis Data        12,29 m3        122 900 000,00 ISK
+                
+                # Split by multiple spaces to separate fields
+                parts = [part.strip() for part in line.split('        ') if part.strip()]
+                
+                if len(parts) >= 5:
+                    item_name = parts[0]
+                    amount_str = parts[1]
+                    category = parts[2]
+                    volume = parts[3]
+                    value_str = parts[4]
+                    
+                    # Parse amount (remove any non-numeric characters)
+                    try:
+                        amount = int(amount_str.replace(',', ''))
+                    except ValueError:
+                        amount = 1
+                    
+                    # Parse value (remove "ISK" and spaces, convert to float)
+                    try:
+                        value_str_clean = value_str.replace('ISK', '').replace(' ', '').replace(',', '.')
+                        value = float(value_str_clean)
+                    except ValueError:
+                        value = 0
+                    
+                    # Check if this is Rogue Drone Infestation Data
+                    if "Rogue Drone Infestation Data" in item_name:
+                        loot_data['rogue_drone_data'] = amount
+                        loot_data['rogue_drone_data_value'] = value
+                        print(f"Found Rogue Drone Infestation Data: {amount} units = {value:,.2f} ISK")
+                    
+                    # Add to total value
+                    loot_data['total_value'] += value
+                    
+                    # Store loot details
+                    loot_data['all_loot'].append({
+                        'name': item_name,
+                        'amount': amount,
+                        'category': category,
+                        'volume': volume,
+                        'value': value
+                    })
+                    
+                    print(f"Loot parsed: {item_name} x{amount} = {value:,.2f} ISK")
+            
+            print(f"Total loot value: {loot_data['total_value']:,.2f} ISK")
+            print(f"Rogue Drone Data: {loot_data['rogue_drone_data']} units = {loot_data['rogue_drone_data_value']:,.2f} ISK")
+            
+        except Exception as e:
+            print(f"Error parsing loot text: {e}")
+            # Return default values if parsing fails
+            loot_data['all_loot'] = [{'name': 'PARSE_ERROR', 'amount': 0, 'category': 'ERROR', 'volume': 'ERROR', 'value': 0}]
+        
+        return loot_data
+    
+    def _show_loot_analysis(self, loot_data):
+        """Display loot analysis results in a popup window."""
+        # Create popup window
+        popup = tk.Toplevel(self.root)
+        popup.title("Loot Analysis Results")
+        popup.geometry("800x600")
+        popup.transient(self.root)
+        popup.grab_set()
+        popup.configure(bg="#2b2b2b")  # Dark background
+        
+        # Create text widget
+        text_frame = tk.Frame(popup)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        text_widget = tk.Text(text_frame, wrap=tk.WORD, font=("Consolas", 10),
+                             bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                             insertbackground="#ffffff",   # White cursor
+                             selectbackground="#4a9eff",  # Blue selection
+                             selectforeground="#ffffff")  # White text when selected
+        scrollbar = tk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview,
+                                bg="#1e1e1e", troughcolor="#2b2b2b",  # Dark scrollbar
+                                activebackground="#404040",            # Darker when active
+                                relief="flat", borderwidth=0)
+        text_widget.configure(yscrollcommand=scrollbar.set)
+        
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Populate with loot analysis
+        text_widget.insert(tk.END, "EVE Online Loot Analysis Results\n")
+        text_widget.insert(tk.END, "=" * 50 + "\n\n")
+        
+        text_widget.insert(tk.END, f"Total Loot Value: {loot_data['total_value']:,.2f} ISK\n")
+        text_widget.insert(tk.END, f"Rogue Drone Data: {loot_data['rogue_drone_data']} units\n")
+        text_widget.insert(tk.END, f"Rogue Drone Value: {loot_data['rogue_drone_data_value']:,.2f} ISK\n")
+        text_widget.insert(tk.END, f"Total Items: {len(loot_data['all_loot'])}\n\n")
+        
+        text_widget.insert(tk.END, "Detailed Loot Breakdown:\n")
+        text_widget.insert(tk.END, "-" * 30 + "\n")
+        
+        for i, loot in enumerate(loot_data['all_loot'], 1):
+            text_widget.insert(tk.END, f"{i}. {loot['name']}\n")
+            text_widget.insert(tk.END, f"   Amount: {loot['amount']:,}\n")
+            text_widget.insert(tk.END, f"   Category: {loot['category']}\n")
+            text_widget.insert(tk.END, f"   Volume: {loot['volume']}\n")
+            text_widget.insert(tk.END, f"   Value: {loot['value']:,.2f} ISK\n\n")
+        
+        text_widget.config(state=tk.DISABLED)
+    
     def export_logs(self):
         """Export current logs to a file."""
         if not self.all_log_entries:
@@ -629,21 +970,11 @@ class MainWindow:
                 self.crab_bounty_label.config(text="0 ISK")
                 self.session_duration_label.config(text="0s")
             
-            # Update beacon display
+            # Update CONCORD display
             try:
-                active_session = self.beacon_tracker.get_active_session()
-                if active_session:
-                    beacon_id = active_session.beacon_id[:8] + "..."
-                    self.current_beacon_label.config(text=beacon_id)
-                    
-                    duration = active_session.get_duration()
-                    self.beacon_duration_label.config(text=format_duration(duration.total_seconds()))
-                else:
-                    self.current_beacon_label.config(text="None")
-                    self.beacon_duration_label.config(text="0s")
+                self.update_concord_display()
             except Exception as e:
-                self.current_beacon_label.config(text="None")
-                self.beacon_duration_label.config(text="0s")
+                pass  # CONCORD display handles its own errors
                 
         except Exception as e:
             print(f"Error in update_status_display: {e}")
@@ -797,33 +1128,7 @@ class MainWindow:
         self.bounty_tracker.end_crab_session()
         self.update_status_display()
     
-    def submit_to_google_forms(self):
-        """Submit current beacon session data to Google Forms."""
-        active_session = self.beacon_tracker.get_active_session()
-        if not active_session:
-            messagebox.showinfo("Info", "No active beacon session to submit")
-            return
-        
-        try:
-            # Prepare session data
-            session_data = {
-                'Beacon ID': active_session.beacon_id,
-                'Total Duration': str(active_session.get_duration()),
-                'Total CRAB Bounty': str(self.bounty_tracker.get_crab_total_bounty()),
-                'Rogue Drone Data Amount': str(active_session.rogue_drone_data),
-                'Loot Details': ', '.join(active_session.loot_details) if active_session.loot_details else 'None'
-            }
-            
-            # Submit to Google Forms
-            success = self.google_forms_service.submit_beacon_session(session_data)
-            
-            if success:
-                messagebox.showinfo("Success", "Beacon session data submitted to Google Forms")
-            else:
-                messagebox.showerror("Error", "Failed to submit to Google Forms")
-        
-        except Exception as e:
-            messagebox.showerror("Error", f"Error submitting to Google Forms: {e}")
+
     
     def export_beacon_data(self):
         """Export beacon session data to a file."""
@@ -832,6 +1137,294 @@ class MainWindow:
             messagebox.showinfo("Success", f"Beacon data exported to {filepath}")
         except Exception as e:
             messagebox.showerror("Error", f"Error exporting beacon data: {e}")
+    
+    def update_concord_countdown(self, text: str, color: str):
+        """Update CONCORD countdown display."""
+        self.concord_countdown_var.set(text)
+        self.concord_countdown_label.config(foreground=color, background="#2b2b2b")
+    
+    def reset_concord_tracking(self):
+        """Reset CONCORD tracking to start fresh."""
+        status = self.beacon_tracker.get_concord_status()
+        if status['countdown_active']:
+            # Ask for confirmation
+            result = messagebox.askyesno(
+                "Reset CONCORD Tracking",
+                "Are you sure you want to reset CONCORD tracking?\n\n"
+                "This will stop the current countdown and clear all tracking data.\n\n"
+                "This action cannot be undone."
+            )
+            
+            if not result:
+                return
+        
+        self.beacon_tracker.reset_concord_tracking()
+        self.update_concord_display()
+        messagebox.showinfo("Reset Complete", "CONCORD tracking has been reset")
+    
+    def copy_beacon_id(self):
+        """Copy current Beacon ID to clipboard."""
+        beacon_id = self.beacon_tracker.current_beacon_id
+        if beacon_id:
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(beacon_id)
+                messagebox.showinfo("Beacon ID Copied", f"Beacon ID copied to clipboard:\n{beacon_id}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to copy Beacon ID: {e}")
+        else:
+            messagebox.showinfo("No Beacon ID", "No active beacon session found")
+    
+    def view_beacon_sessions(self):
+        """View detailed beacon session history."""
+        sessions = self.beacon_tracker.get_all_sessions()
+        if not sessions:
+            messagebox.showinfo("No Sessions", "No beacon sessions recorded yet")
+            return
+        
+        # Create a new window to display session history
+        session_window = tk.Toplevel(self.root)
+        session_window.title("Beacon Session History")
+        session_window.geometry("800x600")
+        
+        # Create text widget with scrollbar
+        text_frame = tk.Frame(session_window)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        text_widget = tk.Text(text_frame, wrap=tk.WORD, font=("Consolas", 10))
+        scrollbar = tk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview)
+        text_widget.configure(yscrollcommand=scrollbar.set)
+        
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Populate with session data
+        text_widget.insert(tk.END, "CONCORD Rogue Analysis Beacon Sessions\n")
+        text_widget.insert(tk.END, "=" * 50 + "\n\n")
+        
+        for i, session in enumerate(sessions, 1):
+            text_widget.insert(tk.END, f"Session {i}:\n")
+            text_widget.insert(tk.END, f"  Beacon ID: {session.beacon_id}\n")
+            text_widget.insert(tk.END, f"  Start Time: {session.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            if session.end_time:
+                text_widget.insert(tk.END, f"  End Time: {session.end_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            text_widget.insert(tk.END, f"  Duration: {session.get_duration()}\n")
+            text_widget.insert(tk.END, f"  Status: {'Active' if session.is_active() else 'Completed' if session.completed else 'Failed'}\n")
+            text_widget.insert(tk.END, f"  Rogue Drone Data: {session.rogue_drone_data}\n")
+            if session.loot_details:
+                text_widget.insert(tk.END, f"  Loot: {', '.join(session.loot_details)}\n")
+            text_widget.insert(tk.END, f"  Source: {session.source_file}\n")
+            text_widget.insert(tk.END, "-" * 30 + "\n\n")
+        
+        text_widget.config(state=tk.DISABLED)
+    
+    def test_concord_link_start(self):
+        """Test function to simulate CONCORD link start."""
+        beacon_id = self.beacon_tracker.test_concord_link_start()
+        self.update_concord_display()
+        messagebox.showinfo("Test Complete", f"CONCORD link start test completed.\nBeacon ID: {beacon_id}")
+    
+    def test_concord_link_complete(self):
+        """Test function to simulate CONCORD link completion."""
+        self.beacon_tracker.test_concord_link_complete()
+        self.update_concord_display()
+        messagebox.showinfo("Test Complete", "CONCORD link completion test completed.")
+    
+    def test_concord_detection(self):
+        """Test advanced CONCORD message detection with sample messages."""
+        try:
+            # Sample CONCORD messages for testing
+            test_messages = [
+                "Your ship has started the link process with CONCORD Rogue Analysis Beacon",
+                "Your ship successfully completed the link process with CONCORD Rogue Analysis Beacon",
+                "CONCORD Rogue Analysis Beacon has been activated",
+                "Analysis in progress... 45%",
+                "Analysis complete... 100%",
+                "Your ship failed to complete the link process with CONCORD Rogue Analysis Beacon"
+            ]
+            
+            # Test each message
+            results = []
+            for message in test_messages:
+                detection = self.beacon_tracker.detect_concord_message(message)
+                if detection:
+                    results.append({
+                        'message': message,
+                        'detection': detection
+                    })
+            
+            # Show results
+            self._show_concord_detection_results(results)
+            
+        except Exception as e:
+            print(f"Error testing CONCORD detection: {e}")
+            messagebox.showerror("Error", f"Error testing CONCORD detection: {str(e)}")
+    
+    def _show_concord_detection_results(self, results):
+        """Display CONCORD detection test results."""
+        # Create popup window
+        popup = tk.Toplevel(self.root)
+        popup.title("CONCORD Detection Test Results")
+        popup.geometry("900x700")
+        popup.transient(self.root)
+        popup.grab_set()
+        popup.configure(bg="#2b2b2b")  # Dark background
+        
+        # Create text widget
+        text_frame = tk.Frame(popup)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        text_widget = tk.Text(text_frame, wrap=tk.WORD, font=("Consolas", 10),
+                             bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                             insertbackground="#ffffff",   # White cursor
+                             selectbackground="#4a9eff",  # Blue selection
+                             selectforeground="#ffffff")  # White text when selected
+        scrollbar = tk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview,
+                                bg="#1e1e1e", troughcolor="#2b2b2b",  # Dark scrollbar
+                                activebackground="#404040",            # Darker when active
+                                relief="flat", borderwidth=0)
+        text_widget.configure(yscrollcommand=scrollbar.set)
+        
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Populate with detection results
+        text_widget.insert(tk.END, "CONCORD Message Detection Test Results\n")
+        text_widget.insert(tk.END, "=" * 60 + "\n\n")
+        
+        if results:
+            text_widget.insert(tk.END, f"Successfully detected {len(results)} CONCORD messages:\n\n")
+            
+            for i, result in enumerate(results, 1):
+                detection = result['detection']
+                text_widget.insert(tk.END, f"{i}. Message Type: {detection['type'].upper()}\n")
+                text_widget.insert(tk.END, f"   Raw Message: {detection['message']}\n")
+                text_widget.insert(tk.END, f"   Timestamp: {detection['timestamp'].strftime('%H:%M:%S')}\n")
+                
+                if 'progress' in detection:
+                    text_widget.insert(tk.END, f"   Progress: {detection['progress']}%\n")
+                
+                text_widget.insert(tk.END, f"   Raw Match: {detection['raw_match']}\n")
+                text_widget.insert(tk.END, "-" * 50 + "\n\n")
+        else:
+            text_widget.insert(tk.END, "No CONCORD messages were detected.\n")
+            text_widget.insert(tk.END, "This may indicate an issue with the detection patterns.\n")
+        
+        text_widget.config(state=tk.DISABLED)
+    
+    def end_crab_failed(self):
+        """End CRAB session as failed - clear countdown and mark as failed."""
+        try:
+            # Ask for confirmation
+            result = messagebox.askyesno(
+                "End CRAB Session - Failed",
+                "Are you sure you want to end the CRAB session as failed?\n\n"
+                "This will stop the current countdown and mark the session as failed.\n\n"
+                "This action cannot be undone."
+            )
+            
+            if not result:
+                return
+            
+            # End the CRAB session as failed
+            self.bounty_tracker.end_crab_session()
+            
+            # Reset CONCORD tracking
+            self.beacon_tracker.reset_concord_tracking()
+            
+            # Update displays
+            self.update_concord_display()
+            self.update_status_display()
+            
+            messagebox.showinfo("CRAB Session Failed", 
+                              "CRAB session has been marked as failed.\n"
+                              "CONCORD tracking has been reset.")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Error ending CRAB session: {e}")
+    
+    def end_crab_submit(self):
+        """End CRAB session and submit data - clear countdown and mark as completed."""
+        try:
+            # Ask for confirmation
+            result = messagebox.askyesno(
+                "End CRAB Session - Submit Data",
+                "Are you sure you want to end the CRAB session and submit data?\n\n"
+                "This will stop the current countdown and submit the session data.\n\n"
+                "This action cannot be undone."
+            )
+            
+            if not result:
+                return
+            
+            # End the CRAB session
+            self.bounty_tracker.end_crab_session()
+            
+            # Get session data for submission
+            active_session = self.beacon_tracker.get_active_session()
+            if active_session:
+                # Prepare session data
+                session_data = {
+                    'Beacon ID': active_session.beacon_id,
+                    'Total Duration': str(active_session.get_duration()),
+                    'Total CRAB Bounty': str(self.bounty_tracker.get_crab_total_bounty()),
+                    'Rogue Drone Data Amount': str(active_session.rogue_drone_data),
+                    'Loot Details': ', '.join(active_session.loot_details) if active_session.loot_details else 'None'
+                }
+                
+                # Submit to Google Forms
+                success = self.google_forms_service.submit_beacon_session(session_data)
+                
+                if success:
+                    messagebox.showinfo("Success", 
+                                      "CRAB session completed and data submitted to Google Forms!\n\n"
+                                      "Session data has been recorded and submitted.")
+                else:
+                    messagebox.showwarning("Submission Warning", 
+                                         "CRAB session completed but failed to submit to Google Forms.\n\n"
+                                         "You can manually submit using the 'Submit to Google Forms' button.")
+            else:
+                messagebox.showinfo("CRAB Session Completed", 
+                                  "CRAB session has been completed.\n"
+                                  "No active beacon session found for data submission.")
+            
+            # Reset CONCORD tracking
+            self.beacon_tracker.reset_concord_tracking()
+            
+            # Update displays
+            self.update_concord_display()
+            self.update_status_display()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Error ending CRAB session: {e}")
+    
+    def update_concord_display(self):
+        """Update the CONCORD display with current status."""
+        status = self.beacon_tracker.get_concord_status()
+        
+        # Update status
+        self.concord_status_var.set(f"Status: {status['status']}")
+        
+        # Update link time
+        if status['link_start']:
+            link_time = status['link_start'].strftime('%H:%M:%S')
+            self.concord_time_var.set(f"Link Time: {link_time}")
+        else:
+            self.concord_time_var.set("Link Time: Not started")
+        
+        # Update Beacon ID
+        beacon_id = self.beacon_tracker.current_beacon_id
+        if beacon_id:
+            # Show shortened beacon ID
+            short_id = beacon_id[:20] + "..." if len(beacon_id) > 23 else beacon_id
+            self.beacon_id_var.set(f"Beacon ID: {short_id}")
+        else:
+            self.beacon_id_var.set("Beacon ID: None")
+        
+        # If no countdown is active, reset countdown display
+        if not status['countdown_active']:
+            self.concord_countdown_var.set("Countdown: --:--")
+            self.concord_countdown_label.config(foreground="#ffff00", background="#2b2b2b")
     
     def update_display_timer(self):
         """Update display elements that need regular updates."""

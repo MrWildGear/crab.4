@@ -7,8 +7,10 @@ including session timing, completion status, and data collection.
 
 import re
 import uuid
+import threading
+import time
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from dataclasses import dataclass
 
 
@@ -70,6 +72,15 @@ class BeaconTracker:
         self.failed_sessions: List[BeaconSession] = []
         self.current_beacon_id: Optional[str] = None
         
+        # CONCORD link tracking
+        self.concord_link_start: Optional[datetime] = None
+        self.concord_link_completed: bool = False
+        self.concord_countdown_active: bool = False
+        self.concord_countdown_thread: Optional[threading.Thread] = None
+        self.stop_concord_countdown: bool = False
+        self.concord_status: str = "Inactive"  # Inactive, Linking, Active
+        self.countdown_callback: Optional[Callable] = None
+        
         # Beacon-related patterns
         self.beacon_patterns = {
             'beacon_start': r'CONCORD.*?Rogue.*?Analysis.*?Beacon',
@@ -77,6 +88,17 @@ class BeaconTracker:
             'beacon_failed': r'Beacon.*?analysis.*?failed',
             'rogue_drone_data': r'Rogue.*?drone.*?data.*?(\d+)',
             'loot_dropped': r'(\w+).*?dropped.*?(\w+)',
+        }
+        
+        # Advanced CONCORD message detection patterns
+        self.concord_patterns = {
+            'link_start': r'Your ship has started the link process with CONCORD Rogue Analysis Beacon',
+            'link_complete': r'Your ship successfully completed the link process with CONCORD Rogue Analysis Beacon',
+            'link_failed': r'Your ship failed to complete the link process with CONCORD Rogue Analysis Beacon',
+            'beacon_activated': r'CONCORD Rogue Analysis Beacon has been activated',
+            'beacon_deactivated': r'CONCORD Rogue Analysis Beacon has been deactivated',
+            'analysis_in_progress': r'Analysis in progress.*?(\d+)%',
+            'analysis_complete': r'Analysis complete.*?(\d+)%',
         }
     
     def start_beacon_session(self, source_file: str = "") -> str:
@@ -323,6 +345,167 @@ class BeaconTracker:
                 f.write("-" * 30 + "\n\n")
         
         return str(filepath)
+    
+    def detect_concord_message(self, log_content: str) -> Optional[Dict[str, Any]]:
+        """
+        Advanced CONCORD message detection with detailed analysis.
+        
+        Returns:
+            Dict containing message type and additional data, or None if no match
+        """
+        try:
+            for pattern_name, pattern in self.concord_patterns.items():
+                match = re.search(pattern, log_content, re.IGNORECASE)
+                if match:
+                    result = {
+                        'type': pattern_name,
+                        'message': log_content.strip(),
+                        'timestamp': datetime.now(),
+                        'raw_match': match.group(0)
+                    }
+                    
+                    # Add specific data for certain patterns
+                    if pattern_name == 'analysis_in_progress':
+                        result['progress'] = int(match.group(1))
+                    elif pattern_name == 'analysis_complete':
+                        result['progress'] = int(match.group(1))
+                    
+                    # Log the detection
+                    if hasattr(self, 'logger'):
+                        self.logger.info(f"CONCORD message detected: {pattern_name} - {log_content[:100]}...")
+                    
+                    return result
+            
+            return None
+            
+        except Exception as e:
+            if hasattr(self, 'logger'):
+                self.logger.error(f"Error in CONCORD message detection: {e}")
+            return None
+    
+    def set_countdown_callback(self, callback: Callable[[str, str], None]):
+        """Set callback function for countdown updates."""
+        self.countdown_callback = callback
+    
+    def start_concord_link(self, beacon_timestamp: datetime = None, source_file: str = ""):
+        """Start CONCORD link process."""
+        if beacon_timestamp is None:
+            beacon_timestamp = datetime.now()
+        
+        self.concord_link_start = beacon_timestamp
+        self.concord_link_completed = False
+        self.concord_status = "Linking"
+        self.start_concord_countdown()
+        
+        # Generate and start beacon session
+        beacon_id = self.generate_beacon_id(source_file, beacon_timestamp)
+        self.start_beacon_session(source_file)
+        
+        return beacon_id
+    
+    def complete_concord_link(self):
+        """Complete CONCORD link process."""
+        self.concord_link_completed = True
+        self.concord_status = "Active"
+    
+    def reset_concord_tracking(self):
+        """Reset CONCORD tracking to start fresh."""
+        # Stop countdown if running
+        self.stop_concord_countdown = True
+        if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
+            self.concord_countdown_thread.join(timeout=1)
+        
+        # Reset all variables
+        self.concord_link_start = None
+        self.concord_link_completed = False
+        self.concord_countdown_active = False
+        self.stop_concord_countdown = False
+        self.concord_status = "Inactive"
+        self.current_beacon_id = None
+        
+        # Clear active sessions
+        self.active_sessions.clear()
+    
+    def generate_beacon_id(self, source_file: str, beacon_timestamp: datetime) -> str:
+        """Generate a unique beacon ID based on timestamp and source file."""
+        timestamp_str = beacon_timestamp.strftime('%Y%m%d%H%M%S')
+        source_hash = str(abs(hash(source_file))) if source_file else "UNKNOWN"
+        return f"BEACON_{timestamp_str}_{source_hash[:8]}"
+    
+    def start_concord_countdown(self):
+        """Start the CONCORD countdown timer."""
+        if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
+            return  # Already running
+        
+        self.stop_concord_countdown = False
+        self.concord_countdown_active = True
+        self.concord_countdown_thread = threading.Thread(target=self.concord_countdown_loop, daemon=True)
+        self.concord_countdown_thread.start()
+    
+    def concord_countdown_loop(self):
+        """Countdown loop for CONCORD link process."""
+        if not self.concord_link_start:
+            return
+        
+        start_time = self.concord_link_start
+        target_time = start_time + timedelta(minutes=60)  # 60-minute countdown
+        
+        while not self.stop_concord_countdown:
+            current_time = datetime.now()
+            
+            if self.concord_link_completed:
+                # Link completed - show countdown format but in green
+                remaining = target_time - current_time
+                minutes = int(remaining.total_seconds() // 60)
+                seconds = int(remaining.total_seconds() % 60)
+                countdown_text = f"Countdown: {minutes:02d}:{seconds:02d}"
+                color = "#00ff00"  # Green
+                
+                if remaining.total_seconds() <= 0:
+                    countdown_text = "COUNTDOWN EXPIRED!"
+                    color = "#ff0000"  # Red
+                    self._update_countdown(countdown_text, color)
+                    break
+                
+                self._update_countdown(countdown_text, color)
+            else:
+                # Still linking - show elapsed time in yellow
+                elapsed = current_time - start_time
+                minutes = int(elapsed.total_seconds() // 60)
+                seconds = int(elapsed.total_seconds() % 60)
+                countdown_text = f"Linking: {minutes:02d}:{seconds:02d}"
+                color = "#ffff00"  # Yellow
+                
+                self._update_countdown(countdown_text, color)
+            
+            time.sleep(1)
+        
+        self.concord_countdown_active = False
+    
+    def _update_countdown(self, text: str, color: str):
+        """Update countdown display via callback."""
+        if self.countdown_callback:
+            self.countdown_callback(text, color)
+    
+    def get_concord_status(self) -> Dict[str, Any]:
+        """Get current CONCORD status information."""
+        return {
+            'status': self.concord_status,
+            'link_start': self.concord_link_start,
+            'link_completed': self.concord_link_completed,
+            'countdown_active': self.concord_countdown_active,
+            'has_active_countdown': self.concord_countdown_active
+        }
+    
+    def test_concord_link_start(self) -> str:
+        """Test function to simulate CONCORD link start."""
+        beacon_timestamp = datetime.now()
+        beacon_id = self.start_concord_link(beacon_timestamp, "TEST_SOURCE")
+        return beacon_id
+    
+    def test_concord_link_complete(self):
+        """Test function to simulate CONCORD link completion."""
+        self.complete_concord_link()
     
     def _find_session_by_id(self, beacon_id: str) -> Optional[BeaconSession]:
         """Find a beacon session by ID."""

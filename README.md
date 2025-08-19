@@ -109,9 +109,12 @@ Configure beacon session data submission in `src/resources/config/google_forms.j
 ### Beacon Tracking
 1. **Start a gaming session**
 2. **Activate a CONCORD Rogue Analysis Beacon**
-3. **Monitor progress** in real-time
-4. **Complete the beacon** to capture session data
-5. **Export or submit data** as needed
+3. **Monitor progress** in real-time with countdown timer
+4. **Use CRAB session controls**:
+   - **End CRAB Failed** (red button) - Mark session as failed
+   - **Submit Data** (green button) - Complete session and submit data
+5. **Export data** to CSV format
+6. **Debug tools** available for testing and troubleshooting
 
 ### Bounty Monitoring
 1. **Start bounty session** when beginning gameplay
