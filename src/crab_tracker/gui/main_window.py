@@ -58,6 +58,7 @@ class MainWindow:
         # Display variables
         self.all_log_entries = []
         self.last_refresh_time = datetime.now()
+        self.last_check_time = datetime.now()  # Track when we last checked for changes
         
         # Setup UI
         self.setup_ui()
@@ -180,15 +181,20 @@ class MainWindow:
         self.last_refresh_label = ttk.Label(status_frame, text="Never")
         self.last_refresh_label.grid(row=1, column=1, sticky="w", padx=5, pady=2)
         
+        # Last check
+        ttk.Label(status_frame, text="Last Check:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
+        self.last_check_label = ttk.Label(status_frame, text="Never")
+        self.last_check_label.grid(row=2, column=1, sticky="w", padx=5, pady=2)
+        
         # Files monitored
-        ttk.Label(status_frame, text="Files Monitored:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
+        ttk.Label(status_frame, text="Files Monitored:").grid(row=3, column=0, sticky="w", padx=5, pady=2)
         self.files_monitored_label = ttk.Label(status_frame, text="0")
-        self.files_monitored_label.grid(row=2, column=1, sticky="w", padx=5, pady=2)
+        self.files_monitored_label.grid(row=3, column=1, sticky="w", padx=5, pady=2)
         
         # Log entries count
-        ttk.Label(status_frame, text="Log Entries:").grid(row=3, column=0, sticky="w", padx=5, pady=2)
+        ttk.Label(status_frame, text="Log Entries:").grid(row=4, column=0, sticky="w", padx=5, pady=2)
         self.log_entries_label = ttk.Label(status_frame, text="0")
-        self.log_entries_label.grid(row=3, column=1, sticky="w", padx=5, pady=2)
+        self.log_entries_label.grid(row=4, column=1, sticky="w", padx=5, pady=2)
     
     def create_bounty_panel(self):
         """Create the bounty tracking panel."""
@@ -555,8 +561,6 @@ class MainWindow:
     def update_status_display(self):
         """Update the status display."""
         try:
-            print(f"Updating status display - monitoring_active: {self.monitoring_active}, high_freq: {self.high_freq_var.get()}")
-            
             # Update monitoring status
             if self.monitoring_active:
                 if self.high_freq_var.get():
@@ -566,7 +570,6 @@ class MainWindow:
             else:
                 status_text = "Inactive"
             
-            print(f"Setting monitoring status to: {status_text}")
             self.monitoring_status_label.config(text=status_text)
             
             # Update last refresh
@@ -575,22 +578,39 @@ class MainWindow:
             else:
                 refresh_text = "Never"
             
-            print(f"Setting last refresh to: {refresh_text}")
             self.last_refresh_label.config(text=refresh_text)
+            
+            # Update last check
+            if self.last_check_time:
+                check_text = self.last_check_time.strftime("%H:%M:%S")
+            else:
+                check_text = "Never"
+            
+            self.last_check_label.config(text=check_text)
+            
+            # Add monitoring activity indicator
+            if self.monitoring_active:
+                time_since_check = (datetime.now() - self.last_check_time).total_seconds()
+                if time_since_check < 2:  # Very recent check
+                    activity_text = "🟢 Active"
+                elif time_since_check < 5:  # Recent check
+                    activity_text = "🟡 Recent"
+                else:  # Stale check
+                    activity_text = "🔴 Stale"
+                
+                # Update monitoring status with activity indicator
+                self.monitoring_status_label.config(text=f"{status_text} - {activity_text}")
             
             # Update files monitored
             try:
                 recent_files = self.file_monitor.get_recent_files()
                 files_count = len(recent_files) if recent_files else 0
-                print(f"Setting files monitored to: {files_count}")
                 self.files_monitored_label.config(text=str(files_count))
             except Exception as e:
-                print(f"Error getting files count: {e}")
                 self.files_monitored_label.config(text="0")
             
             # Update log entries count
             entries_count = len(self.all_log_entries) if self.all_log_entries else 0
-            print(f"Setting log entries to: {entries_count}")
             self.log_entries_label.config(text=str(entries_count))
             
             # Update bounty display
@@ -605,7 +625,6 @@ class MainWindow:
                 else:
                     self.session_duration_label.config(text="0s")
             except Exception as e:
-                print(f"Error updating bounty display: {e}")
                 self.total_bounty_label.config(text="0 ISK")
                 self.crab_bounty_label.config(text="0 ISK")
                 self.session_duration_label.config(text="0s")
@@ -623,11 +642,8 @@ class MainWindow:
                     self.current_beacon_label.config(text="None")
                     self.beacon_duration_label.config(text="0s")
             except Exception as e:
-                print(f"Error updating beacon display: {e}")
                 self.current_beacon_label.config(text="None")
                 self.beacon_duration_label.config(text="0s")
-            
-            print("Status display update completed successfully")
                 
         except Exception as e:
             print(f"Error in update_status_display: {e}")
@@ -697,6 +713,9 @@ class MainWindow:
                 
                 if not self.stop_monitoring_flag:
                     print("Checking for file changes (auto-monitor)...")
+                    
+                    # Update last check time
+                    self.last_check_time = datetime.now()
                     
                     # Get current file sizes and hashes
                     current_file_sizes = {}
