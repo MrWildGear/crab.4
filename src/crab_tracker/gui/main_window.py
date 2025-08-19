@@ -298,6 +298,8 @@ class MainWindow:
         
         # Set up countdown callback
         self.beacon_tracker.set_countdown_callback(self.update_concord_countdown)
+        self.beacon_tracker.set_beacon_started_callback(self.on_beacon_started)
+        self.beacon_tracker.set_beacon_reset_callback(self.on_beacon_reset)
     
     def apply_dark_theme(self):
         """Apply dark theme to the application."""
@@ -619,32 +621,48 @@ class MainWindow:
                                      "Please start a bounty session first.")
                 return
             
+            # Get current beacon ID if available
+            beacon_id = self.beacon_tracker.current_beacon_id
+            beacon_info = f" (Beacon: {beacon_id})" if beacon_id else ""
+            
             # Create a test bounty entry
             test_timestamp = datetime.now()
             test_isk = 50000  # 50k ISK test bounty
             test_source = "TEST_BOUNTY"
+            test_target = "Test Target"
+            test_character = "Test Character"
             
-            # Import BountyEntry class
-            from ..core.bounty_tracker import BountyEntry
+            # Add the test bounty with beacon tracking
+            if beacon_id:
+                self.bounty_tracker.add_bounty_with_beacon(
+                    timestamp=test_timestamp,
+                    amount=test_isk,
+                    source=test_source,
+                    target=test_target,
+                    beacon_id=beacon_id,
+                    character_name=test_character
+                )
+                print(f"Test bounty added: {test_isk:,} ISK{beacon_info}")
+            else:
+                # Fallback to regular bounty entry if no beacon
+                from ..core.bounty_tracker import BountyEntry
+                bounty_entry = BountyEntry(
+                    timestamp=test_timestamp,
+                    amount=test_isk,
+                    source=test_source,
+                    target=test_target,
+                    session_id=self.bounty_tracker._get_current_session_id()
+                )
+                self.bounty_tracker.add_bounty_entry(bounty_entry)
+                print(f"Test bounty added: {test_isk:,} ISK (No beacon)")
             
-            # Create the bounty entry object
-            bounty_entry = BountyEntry(
-                timestamp=test_timestamp,
-                amount=test_isk,
-                source=test_source,
-                target="Test Target",
-                session_id=self.bounty_tracker._get_current_session_id()
-            )
-            
-            # Add the test bounty
-            self.bounty_tracker.add_bounty_entry(bounty_entry)
-            
-            print(f"Test bounty added: {test_isk:,} ISK")
             messagebox.showinfo("Test Bounty Added", 
                               f"Test bounty added successfully!\n\n"
                               f"Amount: {test_isk:,} ISK\n"
                               f"Source: {test_source}\n"
-                              f"Time: {test_timestamp.strftime('%H:%M:%S')}\n\n"
+                              f"Target: {test_target}\n"
+                              f"Character: {test_character}\n"
+                              f"Time: {test_timestamp.strftime('%H:%M:%S')}{beacon_info}\n\n"
                               f"Check the bounty display to see the updated total.")
             
             # Update the display
@@ -975,11 +993,47 @@ class MainWindow:
                 self.update_concord_display()
             except Exception as e:
                 pass  # CONCORD display handles its own errors
+            
+            # Update beacon-bounty integration status
+            try:
+                self._update_beacon_bounty_status()
+            except Exception as e:
+                pass  # Handle errors gracefully
                 
         except Exception as e:
             print(f"Error in update_status_display: {e}")
             import traceback
             traceback.print_exc()
+    
+    def _update_beacon_bounty_status(self):
+        """Update beacon-bounty integration status display."""
+        try:
+            beacon_status = self.beacon_tracker.get_concord_status()
+            bounty_summary = self.bounty_tracker.get_bounty_summary()
+            
+            # Check if beacon and bounty are integrated
+            beacon_active = beacon_status['has_active_countdown']
+            bounty_active = bounty_summary['crab_session_active']
+            
+            if beacon_active and bounty_active:
+                # Both active - show integration status
+                beacon_id = self.beacon_tracker.current_beacon_id
+                beacon_bounty_total = self.bounty_tracker.get_beacon_bounty_total(beacon_id) if beacon_id else 0
+                
+                status_text = f"🟢 Beacon-Bounty Integrated (Beacon: {beacon_id[:8]}... | Bounty: {beacon_bounty_total:,} ISK)"
+                print(f"Beacon-Bounty Status: {status_text}")
+            elif beacon_active:
+                status_text = "🟡 Beacon Active (Bounty tracking needed)"
+                print(f"Beacon-Bounty Status: {status_text}")
+            elif bounty_active:
+                status_text = "🟡 Bounty Active (No beacon session)"
+                print(f"Beacon-Bounty Status: {status_text}")
+            else:
+                status_text = "🔴 No Active Sessions"
+                print(f"Beacon-Bounty Status: {status_text}")
+            
+        except Exception as e:
+            print(f"Error updating beacon-bounty status: {e}")
     
     def toggle_monitoring(self):
         """Toggle automatic monitoring on/off."""
@@ -1142,6 +1196,39 @@ class MainWindow:
         """Update CONCORD countdown display."""
         self.concord_countdown_var.set(text)
         self.concord_countdown_label.config(foreground=color, background="#2b2b2b")
+    
+    def on_beacon_started(self, beacon_id: str):
+        """Called when a beacon session starts - automatically start bounty tracking."""
+        try:
+            # Start bounty session if not already active
+            if not self.bounty_tracker.session_start:
+                self.bounty_tracker.start_session()
+            
+            # Start CRAB session
+            self.bounty_tracker.start_crab_session()
+            
+            # Update status to show beacon-bounty integration
+            self.update_status_display()
+            
+            print(f"Beacon session started: {beacon_id}")
+            print("Bounty tracking automatically started for this beacon session")
+            
+        except Exception as e:
+            print(f"Error starting bounty tracking for beacon {beacon_id}: {e}")
+    
+    def on_beacon_reset(self):
+        """Called when beacon tracking is reset - clear bounty session."""
+        try:
+            # End CRAB session
+            self.bounty_tracker.end_crab_session()
+            
+            # Update status
+            self.update_status_display()
+            
+            print("Beacon tracking reset - bounty session cleared")
+            
+        except Exception as e:
+            print(f"Error resetting bounty tracking: {e}")
     
     def reset_concord_tracking(self):
         """Reset CONCORD tracking to start fresh."""

@@ -20,9 +20,13 @@ class BountyEntry:
     target: str
     location: str = ""
     session_id: str = ""
+    beacon_id: str = ""
+    character_name: str = ""
     
     def __str__(self):
-        return f"[{self.timestamp.strftime('%H:%M:%S')}] {self.amount:,} ISK from {self.target}"
+        beacon_info = f" (Beacon: {self.beacon_id})" if self.beacon_id else ""
+        char_info = f" [{self.character_name}]" if self.character_name else ""
+        return f"[{self.timestamp.strftime('%H:%M:%S')}] {self.amount:,} ISK from {self.target}{beacon_info}{char_info}"
 
 
 class BountyTracker:
@@ -88,6 +92,35 @@ class BountyTracker:
         
         self.logger.info(f"Bounty entry added: {entry}")
     
+    def add_bounty_with_beacon(self, timestamp: datetime, amount: int, source: str, 
+                              target: str = "", location: str = "", beacon_id: str = "", 
+                              character_name: str = ""):
+        """
+        Add a new bounty entry with beacon tracking.
+        
+        Args:
+            timestamp (datetime): When the bounty was received
+            amount (int): Bounty amount in ISK
+            source (str): Source of the bounty (e.g., rat type, mission name)
+            target (str): Target that was killed
+            location (str): Location where bounty was received
+            beacon_id (str): Beacon ID to associate with this bounty
+            character_name (str): Character name that received the bounty
+        """
+        entry = BountyEntry(
+            timestamp=timestamp,
+            amount=amount,
+            source=source,
+            target=target,
+            location=location,
+            session_id=self._get_current_session_id(),
+            beacon_id=beacon_id,
+            character_name=character_name
+        )
+        
+        self.add_bounty_entry(entry)
+        return entry
+    
     def parse_bounty_from_log(self, log_content: str, timestamp: datetime, source: str = "") -> Optional[BountyEntry]:
         """
         Parse bounty information from a log entry.
@@ -151,6 +184,65 @@ class BountyTracker:
             Total CRAB bounty amount in ISK
         """
         return sum(entry.amount for entry in self.crab_bounty_entries)
+    
+    def get_bounties_by_beacon(self, beacon_id: str) -> List[BountyEntry]:
+        """
+        Get all bounty entries associated with a specific beacon.
+        
+        Args:
+            beacon_id (str): Beacon ID to filter by
+            
+        Returns:
+            List of bounty entries for the specified beacon
+        """
+        return [entry for entry in self.bounty_entries if entry.beacon_id == beacon_id]
+    
+    def get_beacon_bounty_total(self, beacon_id: str) -> int:
+        """
+        Get total bounty earned for a specific beacon.
+        
+        Args:
+            beacon_id (str): Beacon ID to get total for
+            
+        Returns:
+            Total bounty amount in ISK for the specified beacon
+        """
+        beacon_entries = self.get_bounties_by_beacon(beacon_id)
+        return sum(entry.amount for entry in beacon_entries)
+    
+    def get_beacon_summary(self, beacon_id: str) -> Dict[str, Any]:
+        """
+        Get summary of bounty data for a specific beacon.
+        
+        Args:
+            beacon_id (str): Beacon ID to get summary for
+            
+        Returns:
+            Dict containing beacon bounty summary
+        """
+        beacon_entries = self.get_bounties_by_beacon(beacon_id)
+        if not beacon_entries:
+            return {
+                'beacon_id': beacon_id,
+                'total_bounty': 0,
+                'entry_count': 0,
+                'characters': [],
+                'sources': []
+            }
+        
+        total_bounty = sum(entry.amount for entry in beacon_entries)
+        characters = list(set(entry.character_name for entry in beacon_entries if entry.character_name))
+        sources = list(set(entry.source for entry in beacon_entries))
+        
+        return {
+            'beacon_id': beacon_id,
+            'total_bounty': total_bounty,
+            'entry_count': len(beacon_entries),
+            'characters': characters,
+            'sources': sources,
+            'first_bounty': min(entry.timestamp for entry in beacon_entries),
+            'last_bounty': max(entry.timestamp for entry in beacon_entries)
+        }
     
     def start_crab_session(self):
         """Start a CRAB-specific bounty session."""
@@ -223,7 +315,7 @@ class BountyTracker:
         
         with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
             writer = csv.writer(csvfile)
-            writer.writerow(['Timestamp', 'Amount', 'Source', 'Target', 'Location', 'Session ID'])
+            writer.writerow(['Timestamp', 'Amount', 'Source', 'Target', 'Location', 'Session ID', 'Beacon ID', 'Character'])
             
             for entry in self.bounty_entries:
                 writer.writerow([
@@ -232,7 +324,9 @@ class BountyTracker:
                     entry.source,
                     entry.target,
                     entry.location,
-                    entry.session_id
+                    entry.session_id,
+                    entry.beacon_id,
+                    entry.character_name
                 ])
         
         return str(filepath)

@@ -80,6 +80,8 @@ class BeaconTracker:
         self.stop_concord_countdown: bool = False
         self.concord_status: str = "Inactive"  # Inactive, Linking, Active
         self.countdown_callback: Optional[Callable] = None
+        self.beacon_started_callback: Optional[Callable] = None
+        self.beacon_reset_callback: Optional[Callable] = None
         
         # Beacon-related patterns
         self.beacon_patterns = {
@@ -387,6 +389,14 @@ class BeaconTracker:
         """Set callback function for countdown updates."""
         self.countdown_callback = callback
     
+    def set_beacon_started_callback(self, callback: Callable[[str], None]):
+        """Set callback function for when beacon sessions start."""
+        self.beacon_started_callback = callback
+    
+    def set_beacon_reset_callback(self, callback: Callable[[], None]):
+        """Set callback function for when beacon tracking is reset."""
+        self.beacon_reset_callback = callback
+    
     def start_concord_link(self, beacon_timestamp: datetime = None, source_file: str = ""):
         """Start CONCORD link process."""
         if beacon_timestamp is None:
@@ -401,7 +411,15 @@ class BeaconTracker:
         beacon_id = self.generate_beacon_id(source_file, beacon_timestamp)
         self.start_beacon_session(source_file)
         
+        # Signal that bounty tracking should start for this beacon
+        self._notify_beacon_started(beacon_id)
+        
         return beacon_id
+    
+    def _notify_beacon_started(self, beacon_id: str):
+        """Notify that a beacon session has started."""
+        if self.beacon_started_callback:
+            self.beacon_started_callback(beacon_id)
     
     def complete_concord_link(self):
         """Complete CONCORD link process."""
@@ -425,6 +443,14 @@ class BeaconTracker:
         
         # Clear active sessions
         self.active_sessions.clear()
+        
+        # Signal that beacon tracking has been reset
+        self._notify_beacon_reset()
+    
+    def _notify_beacon_reset(self):
+        """Notify that beacon tracking has been reset."""
+        if self.beacon_reset_callback:
+            self.beacon_reset_callback()
     
     def generate_beacon_id(self, source_file: str, beacon_timestamp: datetime) -> str:
         """Generate a unique beacon ID based on timestamp and source file."""
