@@ -40,9 +40,12 @@ class LogParser:
         """Initialize the log parser."""
         # Common EVE log patterns
         self.timestamp_patterns = [
-            r'^(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2})',  # 2025.01.15 16:48:34
-            r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})',    # 2025-01-15 16:48:34
-            r'^(\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})',    # 15/01/2025 16:48:34
+            r'\[?\s*(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2})\s*\]?',  # [ 2025.08.19 07:37:05 ]
+            r'\[?\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*\]?',    # [ 2025-01-15 16:48:34 ]
+            r'\[?\s*(\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})\s*\]?',    # [ 15/01/2025 16:48:34 ]
+            r'^(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2})',             # 2025.01.15 16:48:34 (start of line)
+            r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})',               # 2025-01-15 16:48:34 (start of line)
+            r'^(\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})',               # 15/01/2025 16:48:34 (start of line)
         ]
         
         # Bounty-related patterns
@@ -129,7 +132,9 @@ class LogParser:
             match = re.search(pattern, line)
             if match:
                 timestamp_str = match.group(1)
-                return parse_eve_timestamp(timestamp_str)
+                parsed = parse_eve_timestamp(timestamp_str)
+                if parsed:
+                    return parsed
         
         return None
     

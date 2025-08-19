@@ -49,7 +49,7 @@ def parse_eve_timestamp(timestamp_str):
     """
     # Common EVE timestamp formats
     formats = [
-        "%Y.%m.%d %H:%M:%S",  # 2025.01.15 16:48:34
+        "%Y.%m.%d %H:%M:%S",  # 2025.08.19 07:37:05 (most common EVE format)
         "%Y-%m-%d %H:%M:%S",  # 2025-01-15 16:48:34
         "%d/%m/%Y %H:%M:%S",  # 15/01/2025 16:48:34
         "%m/%d/%Y %H:%M:%S",  # 01/15/2025 16:48:34
