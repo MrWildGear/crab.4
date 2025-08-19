@@ -295,6 +295,8 @@ class MainWindow:
         export_frame.grid(row=4, column=0, columnspan=4, sticky="ew", padx=5, pady=5)
         
         ttk.Button(export_frame, text="Export Beacon Data", command=self.export_beacon_data).grid(row=0, column=0, padx=2)
+        ttk.Button(export_frame, text="Update Loot from Clipboard", command=self.update_beacon_loot_from_clipboard, 
+                  style="Info.TButton").grid(row=0, column=1, padx=2)
         
         # Set up countdown callback
         self.beacon_tracker.set_countdown_callback(self.update_concord_countdown)
@@ -1450,7 +1452,19 @@ class MainWindow:
             # Get session data for submission
             active_session = self.beacon_tracker.get_active_session()
             if active_session:
-                # Prepare session data
+                # Try to read clipboard loot data automatically
+                clipboard_loot_data = None
+                try:
+                    clipboard_text = self.root.clipboard_get()
+                    if clipboard_text and clipboard_text.strip():
+                        clipboard_loot_data = self._parse_loot_text(clipboard_text)
+                        print(f"Clipboard loot data parsed: {clipboard_loot_data['total_value']:,.2f} ISK")
+                except tk.TclError:
+                    print("No clipboard data found for loot parsing")
+                except Exception as e:
+                    print(f"Error parsing clipboard loot: {e}")
+                
+                # Prepare session data with clipboard loot if available
                 session_data = {
                     'Beacon ID': active_session.beacon_id,
                     'Total Duration': str(active_session.get_duration()),
@@ -1458,6 +1472,21 @@ class MainWindow:
                     'Rogue Drone Data Amount': str(active_session.rogue_drone_data),
                     'Loot Details': ', '.join(active_session.loot_details) if active_session.loot_details else 'None'
                 }
+                
+                # Add clipboard loot data if available
+                if clipboard_loot_data and clipboard_loot_data['all_loot']:
+                    session_data['Clipboard Loot Total Value'] = f"{clipboard_loot_data['total_value']:,.2f} ISK"
+                    session_data['Clipboard Rogue Drone Data'] = str(clipboard_loot_data['rogue_drone_data'])
+                    session_data['Clipboard Loot Items'] = str(len(clipboard_loot_data['all_loot']))
+                    
+                    # Show loot summary to user
+                    loot_summary = f"Clipboard Loot Found:\n"
+                    loot_summary += f"Total Value: {clipboard_loot_data['total_value']:,.2f} ISK\n"
+                    loot_summary += f"Rogue Drone Data: {clipboard_loot_data['rogue_drone_data']} units\n"
+                    loot_summary += f"Items: {len(clipboard_loot_data['all_loot'])}\n\n"
+                    loot_summary += "This loot data will be included in your submission."
+                    
+                    messagebox.showinfo("Loot Data Found", loot_summary)
                 
                 # Submit to Google Forms
                 success = self.google_forms_service.submit_beacon_session(session_data)
@@ -1484,6 +1513,64 @@ class MainWindow:
             
         except Exception as e:
             messagebox.showerror("Error", f"Error ending CRAB session: {e}")
+    
+    def update_beacon_loot_from_clipboard(self):
+        """Update the current beacon session with loot data from clipboard."""
+        try:
+            # Check if there's an active beacon session
+            active_session = self.beacon_tracker.get_active_session()
+            if not active_session:
+                messagebox.showwarning("No Active Session", 
+                                     "No active beacon session found.\n\n"
+                                     "Please start a beacon session first.")
+                return
+            
+            # Try to read clipboard loot data
+            try:
+                clipboard_text = self.root.clipboard_get()
+                if not clipboard_text or not clipboard_text.strip():
+                    messagebox.showwarning("No Clipboard Data", 
+                                         "No data found in clipboard.\n\n"
+                                         "Please copy loot data from EVE Online first.")
+                    return
+            except tk.TclError:
+                messagebox.showwarning("No Clipboard Data", 
+                                     "No data found in clipboard.\n\n"
+                                     "Please copy loot data from EVE Online first.")
+                return
+            
+            # Parse the loot data
+            loot_data = self._parse_loot_text(clipboard_text)
+            
+            if not loot_data['all_loot']:
+                messagebox.showwarning("No Loot Found", 
+                                     "No valid loot data found in clipboard.\n\n"
+                                     "Please ensure you copied loot data from EVE Online.")
+                return
+            
+            # Update the beacon session with loot data
+            active_session.rogue_drone_data = loot_data['rogue_drone_data']
+            
+            # Clear existing loot details and add new ones
+            active_session.loot_details.clear()
+            for loot in loot_data['all_loot']:
+                active_session.loot_details.append(f"{loot['name']} x{loot['amount']} ({loot['value']:,.0f} ISK)")
+            
+            # Show success message with loot summary
+            loot_summary = f"Beacon session loot updated successfully!\n\n"
+            loot_summary += f"Total Loot Value: {loot_data['total_value']:,.2f} ISK\n"
+            loot_summary += f"Rogue Drone Data: {loot_data['rogue_drone_data']} units\n"
+            loot_summary += f"Items: {len(loot_data['all_loot'])}\n\n"
+            loot_summary += "This loot data will now be included when you submit your session."
+            
+            messagebox.showinfo("Loot Updated", loot_summary)
+            
+            # Update the display
+            self.update_concord_display()
+            
+        except Exception as e:
+            print(f"Error updating beacon loot from clipboard: {e}")
+            messagebox.showerror("Error", f"Error updating loot data: {str(e)}")
     
     def update_concord_display(self):
         """Update the CONCORD display with current status."""
