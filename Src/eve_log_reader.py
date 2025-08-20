@@ -66,6 +66,9 @@ class EVELogReader:
         # Start bounty tracking
         self.bounty_session_start = datetime.now()
         
+        # Scan for active CRAB beacons on startup
+        self.scan_for_active_crab_beacons_on_startup()
+        
         # Start monitoring automatically since it's enabled by default
         if self.high_freq_var.get():
             self.start_monitoring_only()
@@ -478,7 +481,7 @@ class EVELogReader:
         status_frame.rowconfigure(0, weight=1)
         
         # Status bar
-        self.status_var = tk.StringVar(value="Ready - Monitoring recent log files only")
+        self.status_var = tk.StringVar(value="Starting up - Scanning for active CRAB beacons...")
         status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN)
         status_bar.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
         
@@ -674,6 +677,290 @@ class EVELogReader:
         except Exception as e:
             print(f"Error scanning existing bounties: {e}")
     
+    def scan_for_active_crab_beacons(self):
+        """Scan existing log entries for active CRAB beacons and auto-start tracking if recent"""
+        try:
+            print("🔍 Scanning existing log entries for active CRAB beacons...")
+            
+            current_time = datetime.now()
+            active_beacon_found = False
+            
+            # Look for CONCORD link start messages in recent logs
+            for timestamp, line, source_file in self.all_log_entries:
+                if not timestamp:
+                    continue
+                
+                concord_message_type = self.detect_concord_message(line)
+                if concord_message_type == "link_start":
+                    # Calculate how long ago this beacon started
+                    time_since_start = current_time - timestamp
+                    time_since_start_minutes = time_since_start.total_seconds() / 60
+                    
+                    print(f"🔗 Found CONCORD beacon start message from {time_since_start_minutes:.1f} minutes ago")
+                    
+                    # Only auto-start tracking if beacon started less than 1 minute ago
+                    if time_since_start_minutes <= 1.0:
+                        print(f"✅ Beacon started {time_since_start_minutes:.1f} minutes ago - auto-starting CRAB tracking")
+                        
+                        # Set up beacon tracking
+                        self.concord_link_start = timestamp
+                        self.concord_status_var.set("Status: Linking")
+                        self.concord_countdown_active = True
+                        
+                        # Generate unique Beacon ID
+                        self.current_beacon_id = self.generate_beacon_id(source_file, timestamp)
+                        self.beacon_source_file = source_file
+                        
+                        # Start CRAB bounty tracking session
+                        self.start_crab_session()
+                        
+                        # Start countdown timer
+                        self.start_concord_countdown()
+                        
+                        # Update displays
+                        self.update_concord_display()
+                        self.update_bounty_display()
+                        
+                        active_beacon_found = True
+                        print(f"🔗 Auto-started CRAB beacon tracking - ID: {self.current_beacon_id}")
+                        print(f"📁 Source file: {self.beacon_source_file}")
+                        print(f"⏰ Started {time_since_start_minutes:.1f} minutes ago")
+                        
+                        # Only track the first active beacon found
+                        break
+                    else:
+                        print(f"⏰ Beacon started {time_since_start_minutes:.1f} minutes ago - too old to auto-track")
+                
+                elif concord_message_type == "link_complete":
+                    # If we find a completion message, check if it's recent enough to consider the beacon still active
+                    time_since_completion = current_time - timestamp
+                    time_since_completion_minutes = time_since_completion.total_seconds() / 60
+                    
+                    print(f"✅ Found CONCORD beacon completion message from {time_since_completion_minutes:.1f} minutes ago")
+                    
+                    # Only consider it active if completed less than 1 minute ago
+                    if time_since_completion_minutes <= 1.0:
+                        print(f"✅ Beacon completed {time_since_completion_minutes:.1f} minutes ago - checking if we should track it")
+                        
+                        # Look for the corresponding start message
+                        start_timestamp = self.find_beacon_start_timestamp(timestamp, source_file)
+                        if start_timestamp:
+                            time_since_start = current_time - start_timestamp
+                            time_since_start_minutes = time_since_start.total_seconds() / 60
+                            
+                            if time_since_start_minutes <= 1.0:
+                                print(f"✅ Beacon session completed recently - auto-starting tracking")
+                                
+                                # Set up completed beacon tracking
+                                self.concord_link_start = start_timestamp
+                                self.concord_link_completed = True
+                                self.concord_status_var.set("Status: Active")
+                                self.concord_countdown_active = True
+                                
+                                # Generate unique Beacon ID
+                                self.current_beacon_id = self.generate_beacon_id(source_file, start_timestamp)
+                                self.beacon_source_file = source_file
+                                
+                                # Start CRAB bounty tracking session
+                                self.start_crab_session()
+                                
+                                # Start countdown timer (will show elapsed time)
+                                self.start_concord_countdown()
+                                
+                                # Update displays
+                                self.update_concord_display()
+                                self.update_bounty_display()
+                                
+                                active_beacon_found = True
+                                print(f"🔗 Auto-started completed CRAB beacon tracking - ID: {self.current_beacon_id}")
+                                print(f"📁 Source file: {self.beacon_source_file}")
+                                print(f"⏰ Started {time_since_start_minutes:.1f} minutes ago, completed {time_since_completion_minutes:.1f} minutes ago")
+                                
+                                # Only track the first active beacon found
+                                break
+                            else:
+                                print(f"⏰ Beacon session too old ({time_since_start_minutes:.1f} minutes) - not auto-tracking")
+                        else:
+                            print(f"⚠️ Could not find start timestamp for completed beacon")
+                
+                # Check for ongoing beacon sessions (started but not completed)
+                elif concord_message_type == "link_start":
+                    # We already handled link_start above, but let's also check if there's an ongoing session
+                    # that might have started recently but hasn't completed yet
+                    if not active_beacon_found:  # Only if we haven't found an active beacon yet
+                        time_since_start = current_time - timestamp
+                        time_since_start_minutes = time_since_start.total_seconds() / 60
+                        
+                        # Check if this is a very recent start (within 1 minute) that we should track
+                        if time_since_start_minutes <= 1.0:
+                            print(f"🔗 Found very recent beacon start ({time_since_start_minutes:.1f} minutes ago) - auto-starting tracking")
+                            
+                            # Set up beacon tracking
+                            self.concord_link_start = timestamp
+                            self.concord_status_var.set("Status: Linking")
+                            self.concord_countdown_active = True
+                            
+                            # Generate unique Beacon ID
+                            self.current_beacon_id = self.generate_beacon_id(source_file, timestamp)
+                            self.beacon_source_file = source_file
+                            
+                            # Start CRAB bounty tracking session
+                            self.start_crab_session()
+                            
+                            # Start countdown timer
+                            self.start_concord_countdown()
+                            
+                            # Update displays
+                            self.update_concord_display()
+                            self.update_bounty_display()
+                            
+                            active_beacon_found = True
+                            print(f"🔗 Auto-started recent CRAB beacon tracking - ID: {self.current_beacon_id}")
+                            print(f"📁 Source file: {self.beacon_source_file}")
+                            print(f"⏰ Started {time_since_start_minutes:.1f} minutes ago")
+                            
+                            # Only track the first active beacon found
+                            break
+            
+            if not active_beacon_found:
+                print("  No active CRAB beacons found in recent logs")
+                
+                # Check for expired but recent beacon sessions that might still be worth tracking
+                self.check_for_expired_but_recent_beacons()
+            else:
+                print(f"✅ Auto-started CRAB beacon tracking successfully")
+                
+        except Exception as e:
+            print(f"Error scanning for active CRAB beacons: {e}")
+    
+    def find_beacon_start_timestamp(self, completion_timestamp, source_file):
+        """Find the start timestamp for a beacon that was completed"""
+        try:
+            # Look for the start message in the same source file
+            # We'll look for messages within a reasonable time window (e.g., 2 hours before completion)
+            start_window = completion_timestamp - timedelta(hours=2)
+            
+            for timestamp, line, file_name in self.all_log_entries:
+                if file_name == source_file and timestamp and timestamp >= start_window:
+                    concord_message_type = self.detect_concord_message(line)
+                    if concord_message_type == "link_start":
+                        return timestamp
+            
+            return None
+            
+        except Exception as e:
+            print(f"Error finding beacon start timestamp: {e}")
+            return None
+    
+    def check_for_expired_but_recent_beacons(self):
+        """Check for beacon sessions that have expired but are still recent enough to track"""
+        try:
+            current_time = datetime.now()
+            
+            # Look for beacon start messages that are between 1-5 minutes old
+            # These might be expired but still recent enough to be worth tracking
+            for timestamp, line, source_file in self.all_log_entries:
+                if not timestamp:
+                    continue
+                
+                concord_message_type = self.detect_concord_message(line)
+                if concord_message_type == "link_start":
+                    time_since_start = current_time - timestamp
+                    time_since_start_minutes = time_since_start.total_seconds() / 60
+                    
+                    # Check if beacon is between 1-5 minutes old (expired but recent)
+                    if 1.0 < time_since_start_minutes <= 5.0:
+                        print(f"⏰ Found expired but recent beacon ({time_since_start_minutes:.1f} minutes old) - offering to track")
+                        
+                        # Ask user if they want to track this expired beacon
+                        result = messagebox.askyesno(
+                            "Expired Beacon Detected", 
+                            f"A CONCORD beacon was started {time_since_start_minutes:.1f} minutes ago.\n\n"
+                            f"This beacon has expired (60-minute limit), but you can still track it\n"
+                            f"for bounty and session data collection.\n\n"
+                            f"Would you like to start tracking this beacon session?"
+                        )
+                        
+                        if result:
+                            print(f"✅ User chose to track expired beacon - starting tracking")
+                            
+                            # Set up expired beacon tracking
+                            self.concord_link_start = timestamp
+                            self.concord_status_var.set("Status: Expired (Tracking)")
+                            self.concord_countdown_active = False  # Don't start countdown for expired beacon
+                            self.concord_link_completed = False
+                            
+                            # Generate unique Beacon ID
+                            self.current_beacon_id = self.generate_beacon_id(source_file, timestamp)
+                            self.beacon_source_file = source_file
+                            
+                            # Start CRAB bounty tracking session
+                            self.start_crab_session()
+                            
+                            # Update displays
+                            self.update_concord_display()
+                            self.update_bounty_display()
+                            
+                            print(f"🔗 Started tracking expired beacon - ID: {self.current_beacon_id}")
+                            print(f"📁 Source file: {self.beacon_source_file}")
+                            print(f"⏰ Started {time_since_start_minutes:.1f} minutes ago (expired)")
+                            
+                            # Only offer one expired beacon
+                            break
+                        else:
+                            print(f"❌ User declined to track expired beacon")
+                            break
+            
+        except Exception as e:
+            print(f"Error checking for expired beacons: {e}")
+    
+    def scan_for_active_crab_beacons_on_startup(self):
+        """Scan for active CRAB beacons when the app first starts up"""
+        try:
+            print("🚀 Starting up - scanning for active CRAB beacons...")
+            
+            # Wait a moment for the UI to fully initialize
+            self.root.after(1000, self.perform_startup_crab_scan)
+            
+        except Exception as e:
+            print(f"Error setting up startup CRAB scan: {e}")
+    
+    def perform_startup_crab_scan(self):
+        """Perform the actual startup scan for active CRAB beacons"""
+        try:
+            print("🔍 Performing startup CRAB beacon scan...")
+            self.status_var.set("🔍 Scanning for active CRAB beacons...")
+            self.root.update()
+            
+            # Check if we have log entries loaded
+            if not hasattr(self, 'all_log_entries') or not self.all_log_entries:
+                print("  No log entries loaded yet - skipping startup scan")
+                self.status_var.set("⚠️ No log entries loaded - skipping startup scan")
+                return
+            
+            # Perform the scan
+            self.scan_for_active_crab_beacons()
+            
+            # Update status to show scan completed
+            if self.concord_countdown_active:
+                print("✅ Startup scan completed - active CRAB beacon detected and tracking started")
+                self.status_var.set("✅ Startup scan completed - Active CRAB beacon detected and tracking started!")
+                
+                # Update the status with beacon information
+                if self.current_beacon_id:
+                    short_id = self.current_beacon_id[-12:]  # Last 12 characters
+                    self.status_var.set(f"✅ Active CRAB beacon detected! Beacon ID: ...{short_id}")
+            else:
+                print("✅ Startup scan completed - no active CRAB beacons found")
+                self.status_var.set("✅ Startup scan completed - No active CRAB beacons found")
+                
+                # Set to ready status
+                self.root.after(2000, lambda: self.status_var.set("Ready - Monitoring recent log files only"))
+            
+        except Exception as e:
+            print(f"Error during startup CRAB scan: {e}")
+            self.status_var.set(f"❌ Startup scan error: {str(e)}")
+    
     def refresh_recent_logs(self):
         """Refresh and combine only recent log files"""
         try:
@@ -849,6 +1136,9 @@ class EVELogReader:
             
             # Scan for any bounties that might have been missed
             self.scan_existing_bounties()
+            
+            # Scan for active CRAB beacons in existing logs
+            self.scan_for_active_crab_beacons()
             
         except Exception as e:
             self.status_var.set(f"Error refreshing logs: {str(e)}")
