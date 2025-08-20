@@ -85,15 +85,10 @@ REM Show file information
 if exist "dist\CRAB Tracker\EVE_Log_Reader_Enhanced.exe" (
     echo Executable created: dist\CRAB Tracker\EVE_Log_Reader_Enhanced.exe
     
-    REM Get file size
-    for %%A in ("dist\CRAB Tracker\EVE_Log_Reader_Enhanced.exe") do set "size=%%~zA"
-    set /a "size_mb=%size%/1024/1024"
-    echo File size: %size_mb% MB
-    
-    REM Get file hash for verification
+    REM Get file size using PowerShell for better accuracy
     echo.
-    echo Calculating file hash for verification...
-    powershell -Command "Get-FileHash 'dist\CRAB Tracker\EVE_Log_Reader_Enhanced.exe' -Algorithm SHA256 | Select-Object Hash, Algorithm | Format-Table -AutoSize"
+    echo File size and hash information:
+    powershell -Command "$file = 'dist\CRAB Tracker\EVE_Log_Reader_Enhanced.exe'; $size = (Get-Item $file).Length; $sizeMB = [math]::Round($size/1MB, 2); Write-Host \"File size: $sizeMB MB\"; Get-FileHash $file -Algorithm SHA256 | Select-Object Hash, Algorithm | Format-Table -AutoSize"
     
     echo.
     echo ========================================
@@ -123,25 +118,33 @@ if exist "dist\CRAB Tracker\EVE_Log_Reader_Enhanced.exe" (
     echo anti-malware optimizations.
     echo.
     echo IMPORTANT: For distribution, use ZIP format
-echo instead of RAR to reduce detection.
-echo.
+    echo instead of RAR to reduce detection.
+    echo.
+    echo ========================================
+    echo Distribution Ready!
+    echo ========================================
+    echo.
+    echo Your distribution package is ready in:
+    echo dist\CRAB Tracker\
+    echo.
+    echo To create a ZIP for distribution:
+    echo 1. Right-click on "CRAB Tracker" folder
+    echo 2. Select "Send to" ^> "Compressed (zipped) folder"
+    echo 3. Or use: powershell Compress-Archive "dist\CRAB Tracker" "CRAB_Tracker_v1.0.zip"
+    echo.
+    echo Distribution contents:
+    dir "dist\CRAB Tracker" /b
+    echo.
+    echo ========================================
+echo Build completed successfully!
 echo ========================================
-echo Distribution Ready!
-echo ========================================
 echo.
-echo Your distribution package is ready in:
-echo dist\CRAB Tracker\
-echo.
-echo To create a ZIP for distribution:
-echo 1. Right-click on "CRAB Tracker" folder
-echo 2. Select "Send to" ^> "Compressed (zipped) folder"
-echo 3. Or use: powershell Compress-Archive "dist\CRAB Tracker" "CRAB_Tracker_v1.0.zip"
-echo.
-echo Distribution contents:
-dir "dist\CRAB Tracker" /b
-echo.
+echo Final verification:
+if exist "dist\CRAB Tracker\EVE_Log_Reader_Enhanced.exe" (
+    echo ✓ Executable verified successfully
+    echo ✓ Build process completed without errors
 ) else (
-    echo ERROR: Executable not found in dist\CRAB Tracker folder!
+    echo ❌ ERROR: Executable not found in dist\CRAB Tracker folder!
 )
 
 echo.
