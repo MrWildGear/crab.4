@@ -1,5 +1,5 @@
 @echo off
-echo Building CRAB Tracker v0.4.0...
+echo Building CRAB Tracker v0.4.1...
 echo.
 
 REM Check if Python is available

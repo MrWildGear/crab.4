@@ -590,6 +590,9 @@ class MainWindow:
             # Sort by timestamp
             self.all_log_entries = self.log_parser.sort_entries_by_time(self.all_log_entries)
             
+            # Process log entries through beacon tracker for CONCORD detection
+            self.process_log_entries_for_beacon_tracking()
+            
             # Update display
             self.update_log_display()
             
@@ -882,7 +885,7 @@ class MainWindow:
             filepath = filedialog.asksaveasfilename(
                 defaultextension=".txt",
                 filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
-                initialname=filename
+                initialfile=filename
             )
             
             if filepath:
@@ -911,6 +914,9 @@ class MainWindow:
             # Sort by timestamp
             self.all_log_entries = self.log_parser.sort_entries_by_time(self.all_log_entries)
             
+            # Process log entries through beacon tracker for CONCORD detection and bounty tracking
+            self.process_log_entries_for_beacon_tracking()
+            
             # Update display
             self.update_log_display()
             
@@ -928,6 +934,163 @@ class MainWindow:
             # Still update the refresh time even if there's an error
             self.last_refresh_time = datetime.now()
             self.update_status_display()
+    
+    def process_log_entries_for_beacon_tracking(self):
+        """Process log entries through beacon tracker for CONCORD message detection and bounty tracking."""
+        try:
+            if not self.all_log_entries:
+                return
+            
+            print(f"Processing {len(self.all_log_entries)} log entries for beacon tracking and bounty detection...")
+            
+            for entry in self.all_log_entries:
+                if entry.content and entry.timestamp:
+                    # Process through beacon tracker for CONCORD detection
+                    detection = self.beacon_tracker.detect_concord_message(entry.content)
+                    if detection:
+                        print(f"CONCORD message detected: {detection['type']} at {entry.timestamp.strftime('%H:%M:%S')}")
+                        
+                        # Handle different types of CONCORD messages
+                        if detection['type'] == 'link_start':
+                            # Start CONCORD link process
+                            beacon_id = self.beacon_tracker.start_concord_link(entry.timestamp, entry.source_file)
+                            print(f"CONCORD link started: {beacon_id}")
+                            
+                        elif detection['type'] == 'link_complete':
+                            # Complete CONCORD link process
+                            self.beacon_tracker.complete_concord_link()
+                            print("CONCORD link completed")
+                            
+                        elif detection['type'] == 'link_failed':
+                            # Handle link failure
+                            self.beacon_tracker.reset_concord_tracking()
+                            print("CONCORD link failed - tracking reset")
+                            
+                        elif detection['type'] == 'beacon_activated':
+                            # Beacon activated
+                            print("CONCORD beacon activated")
+                            
+                        elif detection['type'] == 'analysis_in_progress':
+                            # Analysis in progress
+                            progress = detection.get('progress', 0)
+                            print(f"CONCORD analysis progress: {progress}%")
+                            
+                        elif detection['type'] == 'analysis_complete':
+                            # Analysis complete
+                            progress = detection.get('progress', 0)
+                            print(f"CONCORD analysis complete: {progress}%")
+                            
+                        # Update displays after processing
+                        self.update_concord_display()
+                        self.update_status_display()
+                    
+                    # Process bounty information from parsed data
+                    if hasattr(entry, 'parsed_data') and entry.parsed_data:
+                        self.process_bounty_data(entry)
+            
+            print("Beacon tracking and bounty processing completed")
+            
+        except Exception as e:
+            print(f"Error processing log entries for beacon tracking: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def process_bounty_data(self, entry):
+        """Process bounty data from log entry."""
+        try:
+            if not entry.parsed_data:
+                return
+            
+            # Check for bounty received
+            if 'bounty_received' in entry.parsed_data:
+                bounty_match = entry.parsed_data['bounty_received']
+                if bounty_match and len(bounty_match) > 0:
+                    bounty_amount_str = bounty_match[0]
+                    try:
+                        # Parse bounty amount (remove commas and convert to int)
+                        bounty_amount = int(bounty_amount_str.replace(',', ''))
+                        print(f"Bounty detected: {bounty_amount:,} ISK at {entry.timestamp.strftime('%H:%M:%S')}")
+                        
+                        # Add bounty to tracker if session is active
+                        bounty_summary = self.bounty_tracker.get_bounty_summary()
+                        if bounty_summary['session_active']:
+                            # Get current beacon ID if available
+                            beacon_id = self.beacon_tracker.current_beacon_id
+                            
+                            if beacon_id:
+                                # Add bounty with beacon tracking
+                                self.bounty_tracker.add_bounty_with_beacon(
+                                    timestamp=entry.timestamp,
+                                    amount=bounty_amount,
+                                    source="LOG_PARSER",
+                                    target="Unknown",
+                                    beacon_id=beacon_id,
+                                    character_name="Unknown"
+                                )
+                                print(f"Bounty added with beacon tracking: {bounty_amount:,} ISK")
+                            else:
+                                # Add regular bounty entry
+                                from ..core.bounty_tracker import BountyEntry
+                                bounty_entry = BountyEntry(
+                                    timestamp=entry.timestamp,
+                                    amount=bounty_amount,
+                                    source="LOG_PARSER",
+                                    target="Unknown",
+                                    session_id=self.bounty_tracker._get_current_session_id()
+                                )
+                                self.bounty_tracker.add_bounty_entry(bounty_entry)
+                                print(f"Bounty added: {bounty_amount:,} ISK")
+                        else:
+                            print("Bounty detected but no active session - starting session automatically")
+                            # Start bounty session automatically
+                            self.bounty_tracker.start_session()
+                            self.bounty_tracker.start_crab_session()
+                            
+                            # Add bounty with beacon tracking if available
+                            beacon_id = self.beacon_tracker.current_beacon_id
+                            if beacon_id:
+                                self.bounty_tracker.add_bounty_with_beacon(
+                                    timestamp=entry.timestamp,
+                                    amount=bounty_amount,
+                                    source="LOG_PARSER",
+                                    target="Unknown",
+                                    beacon_id=beacon_id,
+                                    character_name="Unknown"
+                                )
+                            else:
+                                from ..core.bounty_tracker import BountyEntry
+                                bounty_entry = BountyEntry(
+                                    timestamp=entry.timestamp,
+                                    amount=bounty_amount,
+                                    source="LOG_PARSER",
+                                    target="Unknown",
+                                    session_id=self.bounty_tracker._get_current_session_id()
+                                )
+                                self.bounty_tracker.add_bounty_entry(bounty_entry)
+                        
+                        # Update displays
+                        self.update_status_display()
+                        
+                    except (ValueError, IndexError) as e:
+                        print(f"Error parsing bounty amount '{bounty_amount_str}': {e}")
+            
+            # Check for bounty kill
+            if 'bounty_kill' in entry.parsed_data:
+                bounty_match = entry.parsed_data['bounty_kill']
+                if bounty_match and len(bounty_match) >= 2:
+                    target_name = bounty_match[0]
+                    bounty_amount_str = bounty_match[1]
+                    try:
+                        bounty_amount = int(bounty_amount_str.replace(',', ''))
+                        print(f"Bounty kill detected: {target_name} - {bounty_amount:,} ISK")
+                        # Similar processing as above...
+                    except (ValueError, IndexError) as e:
+                        print(f"Error parsing bounty kill data: {e}")
+                        
+        except Exception as e:
+            print(f"Error processing bounty data: {e}")
+            import traceback
+            traceback.print_exc()
     
     def update_log_display(self):
         """Update the log display with current entries."""
