@@ -702,8 +702,15 @@ class EVELogReader:
                     if time_since_start_minutes <= 1.0:
                         print(f"✅ Beacon started {time_since_start_minutes:.1f} minutes ago - auto-starting CRAB tracking")
                         
+                        # Validate that the beacon timestamp is not in the future
+                        current_time = datetime.now()
+                        beacon_timestamp = timestamp
+                        if beacon_timestamp > current_time:
+                            print(f"⚠️ Warning: Auto-scan beacon timestamp {beacon_timestamp} is in the future, using current time instead")
+                            beacon_timestamp = current_time
+                        
                         # Set up beacon tracking
-                        self.concord_link_start = timestamp
+                        self.concord_link_start = beacon_timestamp
                         self.concord_status_var.set("Status: Linking")
                         self.concord_countdown_active = True
                         
@@ -751,8 +758,15 @@ class EVELogReader:
                             if time_since_start_minutes <= 1.0:
                                 print(f"✅ Beacon session completed recently - auto-starting tracking")
                                 
+                                # Validate that the beacon timestamp is not in the future
+                                current_time = datetime.now()
+                                beacon_timestamp = start_timestamp
+                                if beacon_timestamp > current_time:
+                                    print(f"⚠️ Warning: Completed beacon timestamp {beacon_timestamp} is in the future, using current time instead")
+                                    beacon_timestamp = current_time
+                                
                                 # Set up completed beacon tracking
-                                self.concord_link_start = start_timestamp
+                                self.concord_link_start = beacon_timestamp
                                 self.concord_link_completed = True
                                 self.concord_status_var.set("Status: Active")
                                 self.concord_countdown_active = True
@@ -795,8 +809,15 @@ class EVELogReader:
                         if time_since_start_minutes <= 1.0:
                             print(f"🔗 Found very recent beacon start ({time_since_start_minutes:.1f} minutes ago) - auto-starting tracking")
                             
+                            # Validate that the beacon timestamp is not in the future
+                            current_time = datetime.now()
+                            beacon_timestamp = timestamp
+                            if beacon_timestamp > current_time:
+                                print(f"⚠️ Warning: Very recent beacon timestamp {beacon_timestamp} is in the future, using current time instead")
+                                beacon_timestamp = current_time
+                            
                             # Set up beacon tracking
-                            self.concord_link_start = timestamp
+                            self.concord_link_start = beacon_timestamp
                             self.concord_status_var.set("Status: Linking")
                             self.concord_countdown_active = True
                             
@@ -884,8 +905,15 @@ class EVELogReader:
                         if result:
                             print(f"✅ User chose to track expired beacon - starting tracking")
                             
+                            # Validate that the beacon timestamp is not in the future
+                            current_time = datetime.now()
+                            beacon_timestamp = timestamp
+                            if beacon_timestamp > current_time:
+                                print(f"⚠️ Warning: Expired beacon timestamp {beacon_timestamp} is in the future, using current time instead")
+                                beacon_timestamp = current_time
+                            
                             # Set up expired beacon tracking
-                            self.concord_link_start = timestamp
+                            self.concord_link_start = beacon_timestamp
                             self.concord_status_var.set("Status: Expired (Tracking)")
                             self.concord_countdown_active = False  # Don't start countdown for expired beacon
                             self.concord_link_completed = False
@@ -1037,8 +1065,24 @@ class EVELogReader:
                             # Check for CONCORD link messages
                             concord_message_type = self.detect_concord_message(line)
                             if concord_message_type == "link_start":
-                                beacon_timestamp = datetime.now()
+                                # Use the actual timestamp from the log line, not current time
+                                beacon_timestamp = timestamp if timestamp else datetime.now()
+                                
+                                # Validate that the beacon timestamp is not in the future
+                                current_time = datetime.now()
+                                if beacon_timestamp > current_time:
+                                    print(f"⚠️ Warning: Beacon timestamp {beacon_timestamp} is in the future, using current time instead")
+                                    beacon_timestamp = current_time
+                                
                                 self.concord_link_start = beacon_timestamp
+                                
+                                # Debug logging for beacon start
+                                if self.logger:
+                                    self.logger.info(f"CONCORD beacon start detected")
+                                    self.logger.info(f"Log line timestamp: {timestamp}")
+                                    self.logger.info(f"Beacon timestamp set to: {beacon_timestamp}")
+                                    self.logger.info(f"Current time: {current_time}")
+                                
                                 self.concord_status_var.set("Status: Linking")
                                 self.concord_countdown_active = True
                                 
@@ -1052,6 +1096,8 @@ class EVELogReader:
                                 
                                 print(f"🔗 CONCORD Beacon started - ID: {self.current_beacon_id}")
                                 print(f"📁 Source file: {self.beacon_source_file}")
+                                print(f"⏰ Beacon start time: {beacon_timestamp}")
+                                print(f"⏰ Current time: {current_time}")
                                 
                             elif concord_message_type == "link_complete":
                                 self.concord_link_completed = True
@@ -1249,7 +1295,7 @@ class EVELogReader:
         patterns = [
             r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]',  # [YYYY-MM-DD HH:MM:SS] (exported format)
             r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})',  # YYYY-MM-DD HH:MM:SS
-            r'(\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})',  # MM/DD/YYYY HH:MM:SS
+            r'(\d{1,2}/\d{1,2}/\d{4} \d{1,2}:\d{2}:\d{2})',  # M/D/YYYY H:MM:SS (handles single digits)
             r'(\d{2}:\d{2}:\d{2})',  # HH:MM:SS
         ]
         
@@ -1260,13 +1306,20 @@ class EVELogReader:
                 try:
                     # Try to parse the timestamp
                     if len(timestamp_str) == 8:  # HH:MM:SS
-                        # Add today's date
+                        # Add today's date and treat as local time, then convert to UTC
                         today = datetime.now().strftime("%Y-%m-%d")
                         timestamp_str = f"{today} {timestamp_str}"
+                        # Parse as local time first
+                        local_timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                        # Convert to UTC (assuming EVE logs are in UTC)
+                        # For now, treat as UTC since EVE Online uses UTC
+                        return local_timestamp
                     
                     if len(timestamp_str) == 19:  # YYYY-MM-DD HH:MM:SS
+                        # Parse as UTC timestamp (EVE Online standard)
                         return datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
                     elif len(timestamp_str) == 19:  # MM/DD/YYYY HH:MM:SS
+                        # Parse as UTC timestamp (EVE Online standard)
                         return datetime.strptime(timestamp_str, "%m/%d/%Y %H:%M:%S")
                 except ValueError:
                     continue
@@ -1465,6 +1518,13 @@ class EVELogReader:
         """Test function to simulate CONCORD link start message"""
         print("🧪 Testing CONCORD link start...")
         beacon_timestamp = datetime.now()
+        
+        # Validate that the beacon timestamp is not in the future
+        current_time = datetime.now()
+        if beacon_timestamp > current_time:
+            print(f"⚠️ Warning: Test beacon timestamp {beacon_timestamp} is in the future, using current time instead")
+            beacon_timestamp = current_time
+        
         self.concord_link_start = beacon_timestamp
         self.concord_status_var.set("Status: Linking")
         self.concord_countdown_active = True
@@ -1558,8 +1618,18 @@ class EVELogReader:
                 
                 # Calculate total beacon time
                 beacon_end_time = datetime.now()
+                
+                # Debug logging for time calculation
+                if self.logger:
+                    self.logger.info(f"Beacon end time: {beacon_end_time}")
+                    self.logger.info(f"Beacon start time: {self.concord_link_start}")
+                
                 total_beacon_time = beacon_end_time - self.concord_link_start
                 total_beacon_time_str = str(total_beacon_time).split('.')[0]  # Remove microseconds
+                
+                # Debug logging for duration
+                if self.logger:
+                    self.logger.info(f"Calculated duration: {total_beacon_time_str}")
                 
                 # Prepare session data for CSV
                 session_data = {
@@ -2777,10 +2847,12 @@ class EVELogReader:
             if self.logger:
                 self.logger.info(f"Submitting to Google Form: {form_url}")
                 self.logger.info(f"Form data prepared: {form_fields}")
+                self.logger.info(f"Session data for debugging: {session_data}")
             else:
                 print(f"🌐 Submitting to Google Form: {form_url}")
                 print(f"📊 Form data: {form_fields}")
                 print(f"📋 Session data keys available: {list(session_data.keys())}")
+                print(f"🔍 Session data for debugging: {session_data}")
             
             # Submit the form
             response = requests.post(form_url, data=form_fields, timeout=30)
