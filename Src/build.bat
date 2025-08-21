@@ -1,10 +1,20 @@
 @echo off
+setlocal enabledelayedexpansion
 REM Comprehensive anti-malware build script for EVE Log Reader
 REM This script implements multiple strategies to reduce virus detection
 
 echo ========================================
 echo EVE Log Reader - Anti-Malware Build
 echo ========================================
+echo.
+
+REM Extract APP_VERSION from Python file
+echo Extracting version information...
+for /f "tokens=3 delims= " %%i in ('findstr /C:"APP_VERSION = " eve_log_reader.py') do (
+    set APP_VERSION=%%i
+    set APP_VERSION=!APP_VERSION:"=!
+)
+echo Detected APP_VERSION: !APP_VERSION!
 echo.
 
 REM Check if virtual environment exists and activate it
@@ -92,59 +102,85 @@ if exist "dist\CRAB Tracker\EVE_Log_Reader_Enhanced.exe" (
     
     echo.
     echo ========================================
-    echo Enhanced anti-malware optimizations applied:
+    echo Creating final distribution package...
     echo ========================================
-    echo ✓ UPX compression enabled
-    echo ✓ Aggressive library exclusions
-    echo ✓ Enhanced file metadata
-    echo ✓ Professional company branding
-    echo ✓ Clean build environment
-    echo ✓ Reduced file size
-    echo.
-    echo ========================================
-    echo Additional anti-malware strategies:
-    echo ========================================
-    echo 1. Use ZIP instead of RAR for distribution
-    echo 2. Upload to VirusTotal for analysis
-    echo 3. Submit to Windows Defender for review
-    echo 4. Use code signing certificate (if available)
-    echo 5. Distribute through trusted channels
-    echo.
-    echo ========================================
-    echo Build optimization complete!
-    echo ========================================
-    echo.
-    echo The executable has been built with enhanced
-    echo anti-malware optimizations.
-    echo.
-    echo IMPORTANT: For distribution, use ZIP format
-    echo instead of RAR to reduce detection.
-    echo.
-    echo ========================================
-    echo Distribution Ready!
-    echo ========================================
-    echo.
-    echo Your distribution package is ready in:
-    echo dist\CRAB Tracker\
-    echo.
-    echo To create a ZIP for distribution:
-    echo 1. Right-click on "CRAB Tracker" folder
-    echo 2. Select "Send to" ^> "Compressed (zipped) folder"
-    echo 3. Or use: powershell Compress-Archive "dist\CRAB Tracker" "CRAB_Tracker_v1.0.zip"
-    echo.
-    echo Distribution contents:
-    dir "dist\CRAB Tracker" /b
-    echo.
-    echo ========================================
-echo Build completed successfully!
-echo ========================================
-echo.
-echo Final verification:
-if exist "dist\CRAB Tracker\EVE_Log_Reader_Enhanced.exe" (
-    echo ✓ Executable verified successfully
-    echo ✓ Build process completed without errors
-) else (
-    echo ❌ ERROR: Executable not found in dist\CRAB Tracker folder!
+    
+    REM Create ZIP file with app name and version
+    set DIST_NAME=CRAB_Tracker_v!APP_VERSION!.zip
+    echo Creating: !DIST_NAME!
+    
+    REM Use PowerShell to create ZIP and move everything from dist into it
+    powershell -Command "Compress-Archive -Path 'dist\CRAB Tracker\*' -DestinationPath '!DIST_NAME!' -Force"
+    
+    if exist "!DIST_NAME!" (
+        echo ✓ Successfully created: !DIST_NAME!
+        
+        REM Get ZIP file size
+        for %%A in ("!DIST_NAME!") do (
+            set ZIP_SIZE=%%~zA
+            set /a ZIP_SIZE_MB=!ZIP_SIZE!/1048576
+        )
+        echo ✓ ZIP file size: !ZIP_SIZE_MB! MB
+        
+        REM Clean up the dist folder structure
+        echo Cleaning up build artifacts...
+        rmdir /s /q "dist"
+        rmdir /s /q "build"
+        rmdir /s /q "__pycache__"
+        
+        echo.
+        echo ========================================
+        echo Distribution package ready!
+        echo ========================================
+        echo Final package: !DIST_NAME!
+        echo Package size: !ZIP_SIZE_MB! MB
+        echo.
+        echo The dist folder has been cleaned up.
+        echo All distribution files are now in: !DIST_NAME!
+        echo.
+        echo ========================================
+        echo Enhanced anti-malware optimizations applied:
+        echo ========================================
+        echo ✓ UPX compression enabled
+        echo ✓ Aggressive library exclusions
+        echo ✓ Enhanced file metadata
+        echo ✓ Professional company branding
+        echo ✓ Clean build environment
+        echo ✓ Reduced file size
+        echo ✓ Single ZIP distribution package
+        echo.
+        echo ========================================
+        echo Additional anti-malware strategies:
+        echo ========================================
+        echo 1. Single ZIP file for distribution
+        echo 2. Upload to VirusTotal for analysis
+        echo 3. Submit to Windows Defender for review
+        echo 4. Use code signing certificate (if available)
+        echo 5. Distribute through trusted channels
+        echo.
+        echo ========================================
+        echo Build optimization complete!
+        echo ========================================
+        echo.
+        echo Your distribution package is ready: !DIST_NAME!
+        echo.
+        echo To distribute:
+        echo 1. Send the !DIST_NAME! file
+        echo 2. Users extract and run EVE_Log_Reader_Enhanced.exe
+        echo.
+        echo ========================================
+        echo Distribution Ready!
+        echo ========================================
+        echo.
+        echo Final package: !DIST_NAME!
+        echo.
+        echo ========================================
+    ) else (
+        echo ❌ ERROR: Failed to create ZIP file!
+        echo.
+        echo Distribution folder remains in: dist\CRAB Tracker\
+        echo You can manually create a ZIP file from that folder.
+    )
 )
 
 echo.

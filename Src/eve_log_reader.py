@@ -12,10 +12,13 @@ import csv
 import requests  # New import for Google Form submission
 import logging  # New import for file logging
 
+# Application version
+APP_VERSION = "0.6.1"
+
 class EVELogReader:
     def __init__(self, root):
         self.root = root
-        self.root.title("EVE Online Log Reader - Recent Logs Monitor")
+        self.root.title(f"EVE Online Log Reader v{APP_VERSION} - Recent Logs Monitor")
         self.root.geometry("1400x900")
         
         # Setup logging for Google Form debugging
@@ -204,13 +207,18 @@ class EVELogReader:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(3, weight=1)
+        main_frame.rowconfigure(4, weight=1)  # Updated to account for version label
+        
+        # Version label
+        version_label = ttk.Label(main_frame, text=f"Version {APP_VERSION}", 
+                                 font=("Segoe UI", 8), foreground="#888888")
+        version_label.grid(row=0, column=1, sticky=tk.E, pady=(0, 5))
         
         # Log directory selection
-        ttk.Label(main_frame, text="Log Directory:").grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
+        ttk.Label(main_frame, text="Log Directory:").grid(row=1, column=0, sticky=tk.W, pady=(0, 5))
         
         dir_frame = ttk.Frame(main_frame)
-        dir_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        dir_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         self.dir_var = tk.StringVar(value=self.eve_log_dir)
         dir_entry = tk.Entry(dir_frame, textvariable=self.dir_var, width=70,
@@ -240,7 +248,7 @@ class EVELogReader:
         
         # Filtering controls
         filter_frame = ttk.LabelFrame(main_frame, text="Recent Log Filtering", padding="5")
-        filter_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        filter_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         # Days old filter
         ttk.Label(filter_frame, text="Max days old:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
@@ -276,11 +284,11 @@ class EVELogReader:
         apply_btn.grid(row=0, column=4)
         
         # File monitoring status
-        ttk.Label(main_frame, text="Recent Logs (UTC Timestamp Based):").grid(row=3, column=0, sticky=tk.W, pady=(10, 5))
+        ttk.Label(main_frame, text="Recent Logs (UTC Timestamp Based):").grid(row=4, column=0, sticky=tk.W, pady=(10, 5))
         
         # Bounty tracking display
         bounty_frame = ttk.LabelFrame(main_frame, text="💰 Bounty Tracking", padding="5")
-        bounty_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        bounty_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         # Bounty info labels
         self.bounty_total_var = tk.StringVar(value="Total ISK Earned: 0 ISK")
@@ -315,7 +323,7 @@ class EVELogReader:
         
         # CONCORD Rogue Analysis Beacon tracking display
         concord_frame = ttk.LabelFrame(main_frame, text="🔗 CONCORD Rogue Analysis Beacon", padding="5")
-        concord_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        concord_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         # CONCORD status labels
         self.concord_status_var = tk.StringVar(value="Status: Inactive")
@@ -416,7 +424,7 @@ class EVELogReader:
         
         # CRAB Bounty Tracking display
         crab_bounty_frame = ttk.LabelFrame(main_frame, text="🦀 CRAB Bounty Tracking", padding="5")
-        crab_bounty_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        crab_bounty_frame.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         # CRAB bounty info labels
         self.crab_bounty_total_var = tk.StringVar(value="CRAB Total ISK: 0 ISK")
@@ -459,7 +467,7 @@ class EVELogReader:
         add_crab_bounty_btn.grid(row=0, column=5, padx=(20, 0))
         
         status_frame = ttk.Frame(main_frame)
-        status_frame.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        status_frame.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         # Create text widget with scrollbar for combined logs
         self.text_widget = tk.Text(status_frame, wrap=tk.WORD, height=25,
@@ -483,7 +491,7 @@ class EVELogReader:
         # Status bar
         self.status_var = tk.StringVar(value="Starting up - Scanning for active CRAB beacons...")
         status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN)
-        status_bar.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
+        status_bar.grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
         
         # Apply dark styling to status bar
         style = ttk.Style()
@@ -497,7 +505,7 @@ class EVELogReader:
         
         # Control buttons
         control_frame = ttk.Frame(main_frame)
-        control_frame.grid(row=9, column=0, columnspan=2, pady=(10, 0))
+        control_frame.grid(row=10, column=0, columnspan=2, pady=(10, 0))
         
         # High-frequency monitoring checkbox
         self.high_freq_var = tk.BooleanVar(value=True)
@@ -573,6 +581,15 @@ class EVELogReader:
                                    relief="raised", borderwidth=1,
                                    font=("Segoe UI", 9))
         show_hashes_btn.grid(row=0, column=8, padx=(20, 0))
+        
+        # Version info button
+        version_btn = tk.Button(control_frame, text=f"v{APP_VERSION}", command=self.show_version_info,
+                               bg="#2b2b2b", fg="#888888",  # Darker background, gray text
+                               activebackground="#404040",   # Darker when clicked
+                               activeforeground="#888888",  # Gray text when clicked
+                               relief="flat", borderwidth=1,
+                               font=("Segoe UI", 8))
+        version_btn.grid(row=0, column=9, padx=(20, 0))
         
         self.auto_refresh_thread = None
         self.stop_auto_refresh = False
@@ -983,7 +1000,7 @@ class EVELogReader:
                 self.status_var.set("✅ Startup scan completed - No active CRAB beacons found")
                 
                 # Set to ready status
-                self.root.after(2000, lambda: self.status_var.set("Ready - Monitoring recent log files only"))
+                self.root.after(2000, lambda: self.status_var.set(f"v{APP_VERSION} | Ready - Monitoring recent log files only"))
             
         except Exception as e:
             print(f"Error during startup CRAB scan: {e}")
@@ -1146,7 +1163,7 @@ class EVELogReader:
                 else:
                     file_info.append(log_file.name)
             
-            status_text = f"Monitoring {len(recent_files)} recent files with {total_lines} total log entries | Last refresh: {self.last_refresh_time.strftime('%H:%M:%S')}"
+            status_text = f"v{APP_VERSION} | Monitoring {len(recent_files)} recent files with {total_lines} total log entries | Last refresh: {self.last_refresh_time.strftime('%H:%M:%S')}"
             if self.high_freq_var.get():
                 status_text += " | High-freq: ON"
             else:
@@ -1969,9 +1986,9 @@ class EVELogReader:
                 newest_time = newest_file[1]
                 newest_ago = newest_file[2]
                 
-                status_text = f"Last refresh: {self.last_refresh_time.strftime('%H:%M:%S')} | Last check: {current_time.strftime('%H:%M:%S')} | Newest file: {newest_file[0]} ({newest_ago})"
+                status_text = f"v{APP_VERSION} | Last refresh: {self.last_refresh_time.strftime('%H:%M:%S')} | Last check: {current_time.strftime('%H:%M:%S')} | Newest file: {newest_file[0]} ({newest_ago})"
             else:
-                status_text = f"Last refresh: {self.last_refresh_time.strftime('%H:%M:%S')} | Last check: {current_time.strftime('%H:%M:%S')}"
+                status_text = f"v{APP_VERSION} | Last refresh: {self.last_refresh_time.strftime('%H:%M:%S')} | Last check: {current_time.strftime('%H:%M:%S')}"
             
             # Add monitoring status
             if self.high_freq_var.get():
@@ -2613,7 +2630,7 @@ class EVELogReader:
             
             # Create a new window to display the data
             sessions_window = tk.Toplevel(self.root)
-            sessions_window.title("Beacon Sessions History")
+            sessions_window.title(f"Beacon Sessions History - v{APP_VERSION}")
             sessions_window.geometry("1200x600")
             sessions_window.configure(bg="#2b2b2b")
             
@@ -2945,7 +2962,7 @@ class EVELogReader:
         try:
             # Create configuration window
             config_window = tk.Toplevel(self.root)
-            config_window.title("Google Form Configuration")
+            config_window.title(f"Google Form Configuration - v{APP_VERSION}")
             config_window.geometry("600x500")
             config_window.configure(bg="#2b2b2b")
             config_window.resizable(False, False)
@@ -3200,6 +3217,27 @@ The form will automatically submit beacon session data after each completion."""
         except Exception as e:
             print(f"❌ Error saving Google Form configuration: {e}")
             messagebox.showerror("Save Error", f"Error saving configuration:\n\n{str(e)}")
+
+    def show_version_info(self):
+        """Show version information in a popup window"""
+        version_info = f"""EVE Online Log Reader v{APP_VERSION}
+
+Features:
+• Real-time EVE log monitoring
+• Bounty tracking and statistics
+• CONCORD Rogue Analysis Beacon tracking
+• CRAB bounty session management
+• Google Form integration
+• Dark theme UI
+• High-frequency monitoring
+• Content hash change detection
+
+Built with Python and Tkinter
+For EVE Online players and ISK hunters
+
+© 2025 - EVE Log Reader Project"""
+        
+        messagebox.showinfo("Version Information", version_info)
 
 def main():
     root = tk.Tk()
