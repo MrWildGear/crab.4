@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import threading
 import time
@@ -13,7 +13,10 @@ import requests  # New import for Google Form submission
 import logging  # New import for file logging
 
 # Application version
-APP_VERSION = "0.6.1"
+APP_VERSION = "0.6.2"
+
+# Timezone handling: All timestamps are handled in UTC to match EVE Online log format
+# EVE Online logs use UTC timestamps, so we maintain UTC throughout the system
 
 class EVELogReader:
     def __init__(self, root):
@@ -67,7 +70,7 @@ class EVELogReader:
         self.load_log_files()
         
         # Start bounty tracking
-        self.bounty_session_start = datetime.now()
+        self.bounty_session_start = self.get_utc_now()
         
         # Scan for active CRAB beacons on startup
         self.scan_for_active_crab_beacons_on_startup()
@@ -78,6 +81,10 @@ class EVELogReader:
         
         # Initialize Google Form status display
         self.update_google_form_status_display()
+    
+    def get_utc_now(self):
+        """Get current time in UTC"""
+        return datetime.now(timezone.utc)
     
     def setup_logging(self):
         """Setup logging for Google Form debugging"""
@@ -626,8 +633,9 @@ class EVELogReader:
             char_id = match.group(3)   # Character ID
             
             try:
-                # Parse the timestamp
+                # Parse the timestamp and make it timezone-aware UTC
                 timestamp = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S")
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
                 return timestamp, char_id
             except ValueError:
                 return None, None
@@ -637,21 +645,55 @@ class EVELogReader:
     def is_recent_file(self, file_path):
         """Check if a file is recent based on filename timestamp"""
         filename = os.path.basename(file_path)
+        
+        # Skip configuration and project files
+        skip_patterns = [
+            'google_form_config',
+            'version_info',
+            'requirements',
+            'README',
+            'LICENSE',
+            'CHANGELOG',
+            'build',
+            'setup',
+            'test',
+            'example',
+            'sample'
+        ]
+        
+        # Check if this is a configuration/project file that should be skipped
+        for pattern in skip_patterns:
+            if pattern.lower() in filename.lower():
+                return False
+        
+        # Try to parse timestamp from filename
         timestamp, char_id = self.parse_filename_timestamp(filename)
         
         if timestamp:
             # Check if file is within the specified days old
-            days_old = (datetime.now() - timestamp).days
+            days_old = (self.get_utc_now() - timestamp).days
             return days_old <= self.max_days_old
         
-        # If no timestamp in filename, fall back to file modification time
-        try:
-            mtime = os.path.getmtime(file_path)
-            file_time = datetime.fromtimestamp(mtime)
-            days_old = (datetime.now() - file_time).days
-            return days_old <= self.max_days_old
-        except:
-            return False
+        # If no timestamp in filename, this is likely not an EVE log file
+        # Only process files that look like they might be EVE logs
+        if filename.endswith('.txt') and not any(pattern.lower() in filename.lower() for pattern in skip_patterns):
+            # For .txt files without timestamps, check if they look like EVE logs
+            # by checking if they contain EVE-specific content
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    first_line = f.readline().strip()
+                    # Check if first line contains EVE log patterns
+                    if any(pattern in first_line for pattern in ['[', '(', 'bounty)', 'combat', 'EVE', 'CONCORD']):
+                        # This looks like an EVE log, use modification time
+                        mtime = os.path.getmtime(file_path)
+                        file_time = datetime.fromtimestamp(mtime, tz=timezone.utc)
+                        days_old = (self.get_utc_now() - file_time).days
+                        return days_old <= self.max_days_old
+            except:
+                pass
+        
+        # Skip this file
+        return False
     
     def load_log_files(self):
         """Load available log files from the selected directory"""
@@ -699,7 +741,7 @@ class EVELogReader:
         try:
             print("🔍 Scanning existing log entries for active CRAB beacons...")
             
-            current_time = datetime.now()
+            current_time = self.get_utc_now()
             active_beacon_found = False
             
             # Look for CONCORD link start messages in recent logs
@@ -720,7 +762,7 @@ class EVELogReader:
                         print(f"✅ Beacon started {time_since_start_minutes:.1f} minutes ago - auto-starting CRAB tracking")
                         
                         # Validate that the beacon timestamp is not in the future
-                        current_time = datetime.now()
+                        current_time = self.get_utc_now()
                         beacon_timestamp = timestamp
                         if beacon_timestamp > current_time:
                             print(f"⚠️ Warning: Auto-scan beacon timestamp {beacon_timestamp} is in the future, using current time instead")
@@ -776,7 +818,7 @@ class EVELogReader:
                                 print(f"✅ Beacon session completed recently - auto-starting tracking")
                                 
                                 # Validate that the beacon timestamp is not in the future
-                                current_time = datetime.now()
+                                current_time = self.get_utc_now()
                                 beacon_timestamp = start_timestamp
                                 if beacon_timestamp > current_time:
                                     print(f"⚠️ Warning: Completed beacon timestamp {beacon_timestamp} is in the future, using current time instead")
@@ -827,7 +869,7 @@ class EVELogReader:
                             print(f"🔗 Found very recent beacon start ({time_since_start_minutes:.1f} minutes ago) - auto-starting tracking")
                             
                             # Validate that the beacon timestamp is not in the future
-                            current_time = datetime.now()
+                            current_time = self.get_utc_now()
                             beacon_timestamp = timestamp
                             if beacon_timestamp > current_time:
                                 print(f"⚠️ Warning: Very recent beacon timestamp {beacon_timestamp} is in the future, using current time instead")
@@ -890,10 +932,61 @@ class EVELogReader:
             print(f"Error finding beacon start timestamp: {e}")
             return None
     
+    def find_beacon_end_timestamp(self, start_timestamp, source_file):
+        """Find the end timestamp for a beacon that was started"""
+        try:
+            # Look for the completion message in the same source file
+            # We'll look for messages within a reasonable time window (e.g., 2 hours after start)
+            end_window = start_timestamp + timedelta(hours=2)
+            
+            # FIRST: Look for link_complete message (if it exists)
+            for timestamp, line, file_name in self.all_log_entries:
+                if file_name == source_file and timestamp and timestamp >= start_timestamp and timestamp <= end_window:
+                    concord_message_type = self.detect_concord_message(line)
+                    if concord_message_type == "link_complete":
+                        print(f"✅ Found link_complete message at {timestamp}")
+                        return timestamp
+            
+            # SECOND: Since there's no link_complete message, look for last bounty message
+            # This indicates when the active combat/bounty collection ended
+            last_bounty_time = None
+            for timestamp, line, file_name in self.all_log_entries:
+                if file_name == source_file and timestamp and timestamp >= start_timestamp and timestamp <= end_window:
+                    if "(bounty)" in line:
+                        last_bounty_time = timestamp
+                        print(f"🔍 Found bounty message at {timestamp}")
+            
+            # THIRD: Look for last combat message (indicates session activity ended)
+            last_combat_time = None
+            for timestamp, line, file_name in self.all_log_entries:
+                if file_name == source_file and timestamp and timestamp >= start_timestamp and timestamp <= end_window:
+                    if "(combat)" in line:
+                        last_combat_time = timestamp
+                        print(f"🔍 Found combat message at {timestamp}")
+            
+            # Return the latest of bounty or combat, or None if neither found
+            if last_bounty_time and last_combat_time:
+                end_time = max(last_bounty_time, last_combat_time)
+                print(f"✅ Using latest activity time as beacon end: {end_time}")
+                return end_time
+            elif last_bounty_time:
+                print(f"✅ Using last bounty time as beacon end: {last_bounty_time}")
+                return last_bounty_time
+            elif last_combat_time:
+                print(f"✅ Using last combat time as beacon end: {last_combat_time}")
+                return last_combat_time
+            
+            print(f"⚠️ No activity indicators found for beacon end time")
+            return None
+            
+        except Exception as e:
+            print(f"Error finding beacon end timestamp: {e}")
+            return None
+    
     def check_for_expired_but_recent_beacons(self):
         """Check for beacon sessions that have expired but are still recent enough to track"""
         try:
-            current_time = datetime.now()
+            current_time = self.get_utc_now()
             
             # Look for beacon start messages that are between 1-5 minutes old
             # These might be expired but still recent enough to be worth tracking
@@ -923,10 +1016,10 @@ class EVELogReader:
                             print(f"✅ User chose to track expired beacon - starting tracking")
                             
                             # Validate that the beacon timestamp is not in the future
-                            current_time = datetime.now()
+                            current_time = self.get_utc_now()
                             beacon_timestamp = timestamp
                             if beacon_timestamp > current_time:
-                                print(f"⚠️ Warning: Expired beacon timestamp {beacon_timestamp} is in the future, using current time instead")
+                                print(f"⚠️ Warning: Expired beacon timestamp {beacon_timestamp} is in the future, using current UTC time instead")
                                 beacon_timestamp = current_time
                             
                             # Set up expired beacon tracking
@@ -1036,7 +1129,9 @@ class EVELogReader:
                 return
             
             # Sort files by timestamp (newest first)
-            recent_files.sort(key=lambda x: self.parse_filename_timestamp(x.name)[0] or datetime.min, reverse=True)
+            # Use timezone-aware min datetime to match our UTC timestamps
+            utc_min = datetime.min.replace(tzinfo=timezone.utc)
+            recent_files.sort(key=lambda x: self.parse_filename_timestamp(x.name)[0] or utc_min, reverse=True)
             
             # Limit to max files to show
             if len(recent_files) > self.max_files_to_show:
@@ -1083,10 +1178,10 @@ class EVELogReader:
                             concord_message_type = self.detect_concord_message(line)
                             if concord_message_type == "link_start":
                                 # Use the actual timestamp from the log line, not current time
-                                beacon_timestamp = timestamp if timestamp else datetime.now()
+                                beacon_timestamp = timestamp if timestamp else self.get_utc_now()
                                 
                                 # Validate that the beacon timestamp is not in the future
-                                current_time = datetime.now()
+                                current_time = self.get_utc_now()
                                 if beacon_timestamp > current_time:
                                     print(f"⚠️ Warning: Beacon timestamp {beacon_timestamp} is in the future, using current time instead")
                                     beacon_timestamp = current_time
@@ -1122,7 +1217,7 @@ class EVELogReader:
                                 # Don't stop the countdown - let it continue to show total elapsed time
                                 # self.concord_countdown_active = False
                                 # self.stop_concord_countdown = True
-                                self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {datetime.now().strftime('%H:%M:%S')}")
+                                self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {self.get_utc_now().strftime('%H:%M:%S')}")
                                 self.update_concord_display()
                                 # CRAB session status will be updated by update_concord_display()
                                 
@@ -1146,13 +1241,15 @@ class EVELogReader:
                     continue
             
             # Sort all entries by timestamp (newest first)
-            self.all_log_entries.sort(key=lambda x: x[0] if x[0] else datetime.min, reverse=True)
+            # Use timezone-aware min datetime to match our UTC timestamps
+            utc_min = datetime.min.replace(tzinfo=timezone.utc)
+            self.all_log_entries.sort(key=lambda x: x[0] if x[0] else utc_min, reverse=True)
             
             # Display combined logs
             self.display_combined_logs()
             
             # Update last refresh time
-            self.last_refresh_time = datetime.now()
+            self.last_refresh_time = self.get_utc_now()
             
             # Show file info and refresh status
             file_info = []
@@ -1234,7 +1331,7 @@ class EVELogReader:
         """Check if any recent log files have changed using content hashing"""
         try:
             changed_files = []
-            current_time = datetime.now()
+            current_time = self.get_utc_now()
             
             print(f"\n--- Checking for file changes at {current_time.strftime('%H:%M:%S')} ---")
             
@@ -1245,7 +1342,7 @@ class EVELogReader:
                         # Get current file stats
                         current_size = os.path.getsize(file_path)
                         current_mtime = os.path.getmtime(file_path)
-                        current_mtime_dt = datetime.fromtimestamp(current_mtime)
+                        current_mtime_dt = datetime.fromtimestamp(current_mtime, tz=timezone.utc)
                         
                         # Calculate current content hash
                         current_hash = self.calculate_file_hash(file_path)
@@ -1254,7 +1351,7 @@ class EVELogReader:
                         last_size = self.last_file_sizes.get(file_path, 0)
                         last_mtime = self.last_file_sizes.get(f"{file_path}_mtime", 0)
                         last_hash = self.last_file_hashes.get(file_path, None)
-                        last_mtime_dt = datetime.fromtimestamp(last_mtime) if last_mtime > 0 else None
+                        last_mtime_dt = datetime.fromtimestamp(last_mtime, tz=timezone.utc) if last_mtime > 0 else None
                         
                         # Calculate time differences
                         time_since_last_check = (current_time - current_mtime_dt).total_seconds()
@@ -1282,13 +1379,14 @@ class EVELogReader:
                                 print(f"  Old hash: {last_hash[:8]}...")
                                 print(f"  New hash: {current_hash[:8]}...")
                             if mtime_changed:
-                                print(f"  MTime: {last_mtime_dt.strftime('%H:%M:%S') if last_mtime_dt else 'Never'} -> {current_mtime_dt.strftime('%H:%M:%S')}")
+                                last_mtime_str = last_mtime_dt.strftime('%H:%M:%S') if last_mtime_dt else 'Never'
+                                print(f"  MTime: {last_mtime_str} -> {current_mtime_dt.strftime('%H:%M:%S')}")
                                 print(f"  Time since last check: {time_since_last_check:.1f} seconds")
                             if size_changed:
                                 print(f"  Size: {last_size} -> {current_size} bytes")
                         else:
                             # Show files that haven't changed for debugging
-                            if last_hash:
+                            if last_hash and last_mtime_dt:
                                 time_since_last_change = (current_time - last_mtime_dt).total_seconds()
                                 print(f"  No change: {os.path.basename(file_path)} (last modified: {time_since_last_change:.1f}s ago, hash: {last_hash[:8]}...)")
                             else:
@@ -1323,21 +1421,22 @@ class EVELogReader:
                 try:
                     # Try to parse the timestamp
                     if len(timestamp_str) == 8:  # HH:MM:SS
-                        # Add today's date and treat as local time, then convert to UTC
-                        today = datetime.now().strftime("%Y-%m-%d")
+                        # Add today's date and treat as UTC time (EVE logs are UTC)
+                        today = self.get_utc_now().strftime("%Y-%m-%d")
                         timestamp_str = f"{today} {timestamp_str}"
-                        # Parse as local time first
-                        local_timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-                        # Convert to UTC (assuming EVE logs are in UTC)
-                        # For now, treat as UTC since EVE Online uses UTC
-                        return local_timestamp
+                        # Parse as UTC timestamp
+                        utc_timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                        # Make it timezone-aware UTC
+                        return utc_timestamp.replace(tzinfo=timezone.utc)
                     
                     if len(timestamp_str) == 19:  # YYYY-MM-DD HH:MM:SS
                         # Parse as UTC timestamp (EVE Online standard)
-                        return datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                        utc_timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                        return utc_timestamp.replace(tzinfo=timezone.utc)
                     elif len(timestamp_str) == 19:  # MM/DD/YYYY HH:MM:SS
                         # Parse as UTC timestamp (EVE Online standard)
-                        return datetime.strptime(timestamp_str, "%m/%d/%Y %H:%M:%S")
+                        utc_timestamp = datetime.strptime(timestamp_str, "%m/%d/%Y %H:%M:%S")
+                        return utc_timestamp.replace(tzinfo=timezone.utc)
                 except ValueError:
                     continue
         
@@ -1428,11 +1527,11 @@ class EVELogReader:
     
     def concord_countdown_loop(self):
         """Countdown loop for CONCORD link process"""
-        start_time = datetime.now()
+        start_time = self.get_utc_now()
         target_time = start_time + timedelta(minutes=60)
         
         while not self.stop_concord_countdown:
-            current_time = datetime.now()
+            current_time = self.get_utc_now()
             
             if self.concord_link_completed:
                 # Link completed - show countdown format but in green
@@ -1534,10 +1633,10 @@ class EVELogReader:
     def test_concord_link_start(self):
         """Test function to simulate CONCORD link start message"""
         print("🧪 Testing CONCORD link start...")
-        beacon_timestamp = datetime.now()
+        beacon_timestamp = self.get_utc_now()
         
         # Validate that the beacon timestamp is not in the future
-        current_time = datetime.now()
+        current_time = self.get_utc_now()
         if beacon_timestamp > current_time:
             print(f"⚠️ Warning: Test beacon timestamp {beacon_timestamp} is in the future, using current time instead")
             beacon_timestamp = current_time
@@ -1564,7 +1663,7 @@ class EVELogReader:
             # Don't stop the countdown - let it continue to show elapsed time
             # self.concord_countdown_active = False
             # self.stop_concord_countdown = True
-            completion_time = datetime.now()
+            completion_time = self.get_utc_now()
             self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {completion_time.strftime('%H:%M:%S')}")
             self.update_concord_display()
             # CRAB session status will be updated by update_concord_display()
@@ -1595,7 +1694,7 @@ class EVELogReader:
             self.concord_link_completed = True
             self.concord_status_var.set("Status: Failed")
             self.concord_countdown_var.set("Countdown: --:--")
-            completion_time = datetime.now()
+            completion_time = self.get_utc_now()
             self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {completion_time.strftime('%H:%M:%S')}")
             
             # End CRAB session
@@ -1633,13 +1732,49 @@ class EVELogReader:
                 # Parse loot data from clipboard
                 loot_data = self.parse_clipboard_loot(clipboard_data)
                 
-                # Calculate total beacon time
-                beacon_end_time = datetime.now()
+                # Validate that we still have a valid beacon start time
+                if not self.concord_link_start:
+                    messagebox.showerror("Error", "Beacon start time has been lost. Please restart the beacon session.")
+                    return
+                
+                # Try to find the actual beacon end time from log files
+                beacon_end_time = self.find_beacon_end_timestamp(self.concord_link_start, self.beacon_source_file)
+                if not beacon_end_time:
+                    # Fall back to current time if we can't find the actual end time
+                    beacon_end_time = self.get_utc_now()
+                    print(f"⚠️ Could not find actual beacon end time in logs, using current UTC time: {beacon_end_time}")
+                    print(f"💡 Tip: If you know when the beacon actually ended, you can manually set the end time")
+                    
+                    # Ask user if they want to manually set the end time
+                    result = messagebox.askyesno(
+                        "Beacon End Time Not Found", 
+                        f"Could not automatically determine when the beacon ended.\n\n"
+                        f"Beacon start: {self.concord_link_start.strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
+                        f"Current time: {beacon_end_time.strftime('%Y-%m-%d %H:%M:%S')} UTC\n\n"
+                        f"Would you like to manually specify when the beacon ended?\n"
+                        f"(This will give you more accurate duration calculations)"
+                    )
+                    
+                    if result:
+                        # For now, just show a message - TODO: implement time picker
+                        messagebox.showinfo(
+                            "Manual End Time", 
+                            "Manual end time setting will be implemented in a future update.\n\n"
+                            "For now, the system will use the current time as the beacon end time."
+                        )
+                else:
+                    print(f"✅ Found actual beacon end time in logs: {beacon_end_time}")
                 
                 # Debug logging for time calculation
                 if self.logger:
                     self.logger.info(f"Beacon end time: {beacon_end_time}")
                     self.logger.info(f"Beacon start time: {self.concord_link_start}")
+                
+                # Additional debug info for timing issues
+                print(f"🔍 Debug: Beacon start time: {self.concord_link_start} (UTC)")
+                print(f"🔍 Debug: Beacon end time: {beacon_end_time} (UTC)")
+                print(f"🔍 Debug: Current UTC time: {self.get_utc_now()} (UTC)")
+                print(f"🔍 Debug: Timezone info - Start: {self.concord_link_start.tzinfo}, End: {beacon_end_time.tzinfo}")
                 
                 total_beacon_time = beacon_end_time - self.concord_link_start
                 total_beacon_time_str = str(total_beacon_time).split('.')[0]  # Remove microseconds
@@ -1647,6 +1782,8 @@ class EVELogReader:
                 # Debug logging for duration
                 if self.logger:
                     self.logger.info(f"Calculated duration: {total_beacon_time_str}")
+                
+                print(f"🔍 Debug: Calculated duration: {total_beacon_time_str}")
                 
                 # Prepare session data for CSV
                 session_data = {
@@ -1843,7 +1980,7 @@ class EVELogReader:
                     session_data['total_loot_value'],
                     session_data['loot_details'],
                     session_data['source_file'],
-                    datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    self.get_utc_now().strftime('%Y-%m-%d %H:%M:%S')
                 ]
                 writer.writerow(row)
             
@@ -1857,7 +1994,7 @@ class EVELogReader:
     def add_bounty_entry(self, timestamp, isk_amount, source_file):
         """Add a new bounty entry to the tracking system"""
         if self.bounty_session_start is None:
-            self.bounty_session_start = datetime.now()
+            self.bounty_session_start = self.get_utc_now()
         
         bounty_entry = {
             'timestamp': timestamp,
@@ -1888,7 +2025,7 @@ class EVELogReader:
         
         self.bounty_entries = []
         self.total_bounty_isk = 0
-        self.bounty_session_start = datetime.now()
+        self.bounty_session_start = self.get_utc_now()
         self.update_bounty_display()
         print("🔄 Bounty tracking reset")
     
@@ -1944,14 +2081,14 @@ class EVELogReader:
         """Get detailed information about file modification times"""
         try:
             file_info = []
-            current_time = datetime.now()
+            current_time = self.get_utc_now()
             
             for pattern in self.log_patterns:
                 for log_file in Path(self.eve_log_dir).glob(pattern):
                     if os.path.exists(log_file) and self.is_recent_file(log_file):
                         file_path = str(log_file)
                         mtime = os.path.getmtime(file_path)
-                        mtime_dt = datetime.fromtimestamp(mtime)
+                        mtime_dt = datetime.fromtimestamp(mtime, tz=timezone.utc)
                         time_ago = (current_time - mtime_dt).total_seconds()
                         
                         if time_ago < 60:
@@ -1974,7 +2111,7 @@ class EVELogReader:
     def update_status_with_check_time(self):
         """Update status to show last check time and file modification info"""
         if self.last_refresh_time:
-            current_time = datetime.now()
+            current_time = self.get_utc_now()
             time_since_refresh = current_time - self.last_refresh_time
             minutes = int(time_since_refresh.total_seconds() // 60)
             seconds = int(time_since_refresh.total_seconds() % 60)
@@ -2043,7 +2180,7 @@ class EVELogReader:
             text_widget.insert(tk.END, "File Modification Times (Newest First)\n")
             text_widget.insert(tk.END, "=" * 60 + "\n\n")
             
-            current_time = datetime.now()
+            current_time = self.get_utc_now()
             
             for filename, mtime, time_ago in file_info:
                 # Calculate exact time difference
@@ -2119,7 +2256,7 @@ class EVELogReader:
             text_widget.insert(tk.END, "File Content Hashes (Newest First)\n")
             text_widget.insert(tk.END, "=" * 70 + "\n\n")
             
-            current_time = datetime.now()
+            current_time = self.get_utc_now()
             
             for filename, mtime, time_ago in file_info:
                 file_path = os.path.join(self.eve_log_dir, filename)
@@ -2161,7 +2298,7 @@ class EVELogReader:
         """Create a test log file to test auto-refresh functionality"""
         try:
             # Create a test log file with current timestamp
-            now = datetime.now()
+            now = self.get_utc_now()
             timestamp_str = now.strftime("%Y%m%d_%H%M%S")
             test_filename = f"{timestamp_str}_99999999_test.txt"
             test_file_path = os.path.join(self.eve_log_dir, test_filename)
@@ -2188,7 +2325,7 @@ class EVELogReader:
         """Manually trigger a refresh of the logs"""
         print("Manual refresh triggered")
         self.refresh_recent_logs()
-        self.last_refresh_time = datetime.now()
+        self.last_refresh_time = self.get_utc_now()
         self.status_var.set(f"Last refresh: {self.last_refresh_time.strftime('%Y-%m-%d %H:%M:%S')}")
     
     def clear_display(self):
@@ -2208,7 +2345,7 @@ class EVELogReader:
             
             if file_path:
                 with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(f"EVE Online Recent Logs - Exported on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"EVE Online Recent Logs - Exported on {self.get_utc_now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                     f.write(f"Filter: Last {self.max_days_old} day(s), Max {self.max_files_to_show} files\n")
                     f.write("=" * 80 + "\n\n")
                     
@@ -2266,7 +2403,7 @@ class EVELogReader:
             
             # Session info
             if self.bounty_session_start:
-                session_duration = datetime.now() - self.bounty_session_start
+                session_duration = self.get_utc_now() - self.bounty_session_start
                 hours = int(session_duration.total_seconds() // 3600)
                 minutes = int((session_duration.total_seconds() % 3600) // 60)
                 
@@ -2332,7 +2469,7 @@ class EVELogReader:
             
             # Update session info
             if self.bounty_session_start:
-                session_duration = datetime.now() - self.bounty_session_start
+                session_duration = self.get_utc_now() - self.bounty_session_start
                 hours = int(session_duration.total_seconds() // 3600)
                 minutes = int((session_duration.total_seconds() % 3600) // 60)
                 self.bounty_session_var.set(f"Session: {hours}h {minutes}m")
@@ -2354,7 +2491,7 @@ class EVELogReader:
             
             if file_path:
                 with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(f"EVE Online Bounty Tracking - Exported on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"EVE Online Bounty Tracking - Exported on {self.get_utc_now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                     f.write(f"Session Start: {self.bounty_session_start.strftime('%Y-%m-%d %H:%M:%S')}\n")
                     f.write(f"Total Bounties: {len(self.bounty_entries)}\n")
                     f.write(f"Total ISK Earned: {self.total_bounty_isk:,} ISK\n")
@@ -2463,7 +2600,7 @@ class EVELogReader:
             if self.concord_link_start:
                 text_widget.insert(tk.END, f"CRAB Session Started: {self.concord_link_start.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 if self.concord_link_completed:
-                    completion_time = datetime.now()
+                    completion_time = self.get_utc_now()
                     session_duration = completion_time - self.concord_link_start
                     hours = int(session_duration.total_seconds() // 3600)
                     minutes = int((session_duration.total_seconds() % 3600) // 60)
@@ -2549,7 +2686,7 @@ class EVELogReader:
             return
         
         # Create a test bounty entry
-        test_timestamp = datetime.now()
+        test_timestamp = self.get_utc_now()
         test_isk = 50000  # 50k ISK test bounty
         
         self.add_crab_bounty_entry(test_timestamp, test_isk, "TEST_CRAB_BOUNTY")
@@ -2739,7 +2876,7 @@ class EVELogReader:
                 return
             
             with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(f"EVE Online Beacon Sessions - Exported on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"EVE Online Beacon Sessions - Exported on {self.get_utc_now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write("=" * 80 + "\n\n")
                 
                 for i, session in enumerate(sessions, 1):
@@ -3127,7 +3264,7 @@ The form will automatically submit beacon session data after each completion."""
                 'total_loot_value': '15,000,000',
                 'loot_details': 'Test loot data',
                 'source_file': 'test_file.txt',
-                'export_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                'export_date': self.get_utc_now().strftime('%Y-%m-%d %H:%M:%S')
             }
             
             # Map to form fields
