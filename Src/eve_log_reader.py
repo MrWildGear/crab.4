@@ -13,7 +13,7 @@ import requests  # New import for Google Form submission
 import logging  # New import for file logging
 
 # Application version
-APP_VERSION = "0.6.2"
+APP_VERSION = "0.6.3"
 
 # Timezone handling: All timestamps are handled in UTC to match EVE Online log format
 # EVE Online logs use UTC timestamps, so we maintain UTC throughout the system
@@ -1877,19 +1877,31 @@ class EVELogReader:
         }
         
         try:
-            lines = clipboard_text.strip().split('\n')
+            print(f" Raw clipboard data: {repr(clipboard_text)}")  # Debug: show raw data
             
-            for line in lines:
+            lines = clipboard_text.strip().split('\n')
+            print(f" Clipboard has {len(lines)} lines")
+            
+            for i, line in enumerate(lines):
                 line = line.strip()
                 if not line:
                     continue
                 
-                # Parse loot line format:
-                # Item Name        Amount    Category    Volume    Value
-                # Example: Rogue Drone Infestation Data        1229        Rogue Drone Analysis Data        12,29 m3        122 900 000,00 ISK
+                print(f" Processing line {i+1}: {repr(line)}")
                 
-                # Split by multiple spaces to separate fields
+                # More flexible parsing - handle different spacing patterns
+                # First try the original 4-space split
                 parts = [part.strip() for part in line.split('        ') if part.strip()]
+                
+                # If that doesn't work, try splitting by multiple spaces
+                if len(parts) < 5:
+                    parts = [part.strip() for part in line.split('  ') if part.strip()]
+                
+                # If still not enough parts, try single space split and filter empty
+                if len(parts) < 5:
+                    parts = [part.strip() for part in line.split(' ') if part.strip()]
+                
+                print(f"🔍 Line {i+1} parsed into {len(parts)} parts: {parts}")
                 
                 if len(parts) >= 5:
                     item_name = parts[0]
@@ -1929,7 +1941,9 @@ class EVELogReader:
                         'value': value
                     })
                     
-                    print(f"📦 Loot parsed: {item_name} x{amount} = {value:,.2f} ISK")
+                    print(f" Loot parsed: {item_name} x{amount} = {value:,.2f} ISK")
+                else:
+                    print(f"⚠️ Line {i+1} has insufficient parts ({len(parts)} < 5): {parts}")
             
             print(f"💰 Total loot value: {loot_data['total_value']:,.2f} ISK")
             print(f"🔍 Rogue Drone Data: {loot_data['rogue_drone_data']} units = {loot_data['rogue_drone_data_value']:,.2f} ISK")
@@ -2959,10 +2973,10 @@ class EVELogReader:
             # Define mapping from Google Form field names to session data keys
             field_to_data_mapping = {
                 "Beacon ID": "beacon_id",
-                "Total Duration": "total_time",
+                "Total Duration": "total_time", 
                 "Total CRAB Bounty": "total_crab_bounty",
                 "Rogue Drone Data Amount": "rogue_drone_data_amount",
-                "Loot Details": "loot_details"
+                "Loot Details": "loot_details"  # This was correct, but let's verify the session data key
             }
             
             if self.logger:
