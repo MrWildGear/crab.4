@@ -13,7 +13,7 @@ import requests  # New import for Google Form submission
 import logging  # New import for file logging
 
 # Application version
-APP_VERSION = "0.6.4"
+APP_VERSION = "0.6.5"
 
 # Timezone handling: All timestamps are handled in UTC to match EVE Online log format
 # EVE Online logs use UTC timestamps, so we maintain UTC throughout the system
@@ -62,9 +62,12 @@ class EVELogReader:
         self.crab_total_bounty_isk = 0  # Total ISK earned during CRAB sessions
         self.crab_session_active = False  # Whether a CRAB session is currently active
         
+        # Popup prevention system to avoid spam
+        self._expired_beacon_popup_shown = False  # Prevent multiple expired beacon popups
+        
         # Settings for recent file filtering
         self.max_days_old = 1  # Only show logs from last 24 hours by default
-        self.max_files_to_show = 10  # Maximum number of recent files to display
+        self.max_files_to_show = 20  # Maximum number of recent files to display
         
         self.setup_ui()
         self.load_log_files()
@@ -988,6 +991,12 @@ class EVELogReader:
         try:
             current_time = self.get_utc_now()
             
+            # Prevent multiple popups for the same expired beacon
+            # Check if we've already shown a popup for this beacon
+            if hasattr(self, '_expired_beacon_popup_shown') and self._expired_beacon_popup_shown:
+                print("⏰ Expired beacon popup already shown - skipping to prevent spam")
+                return
+            
             # Look for beacon start messages that are between 1-5 minutes old
             # These might be expired but still recent enough to be worth tracking
             for timestamp, line, source_file in self.all_log_entries:
@@ -1002,6 +1011,9 @@ class EVELogReader:
                     # Check if beacon is between 1-5 minutes old (expired but recent)
                     if 1.0 < time_since_start_minutes <= 5.0:
                         print(f"⏰ Found expired but recent beacon ({time_since_start_minutes:.1f} minutes old) - offering to track")
+                        
+                        # Mark that we've shown a popup to prevent spam
+                        self._expired_beacon_popup_shown = True
                         
                         # Ask user if they want to track this expired beacon
                         result = messagebox.askyesno(
@@ -1627,6 +1639,9 @@ class EVELogReader:
         self.stop_concord_countdown = False
         self.current_beacon_id = None
         self.beacon_source_file = None
+        
+        # Reset popup prevention flag to allow new expired beacon detection
+        self._expired_beacon_popup_shown = False
         
         # Reset CRAB tracking
         self.reset_crab_bounty_tracking()
@@ -2730,6 +2745,12 @@ class EVELogReader:
     def start_crab_session(self):
         """Start a CRAB bounty tracking session"""
         self.crab_session_active = True
+        
+        # Reset popup prevention flag when starting a new session
+        # This allows expired beacon detection for future sessions
+        if hasattr(self, '_expired_beacon_popup_shown'):
+            self._expired_beacon_popup_shown = False
+        
         self.update_crab_bounty_display()
         print("🦀 CRAB bounty tracking session started")
     
