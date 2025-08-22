@@ -13,7 +13,7 @@ import requests  # New import for Google Form submission
 import logging  # New import for file logging
 
 # Application version
-APP_VERSION = "0.6.3"
+APP_VERSION = "0.6.4"
 
 # Timezone handling: All timestamps are handled in UTC to match EVE Online log format
 # EVE Online logs use UTC timestamps, so we maintain UTC throughout the system
@@ -1500,16 +1500,21 @@ class EVELogReader:
     
     def detect_concord_message(self, line):
         """Detect CONCORD Rogue Analysis Beacon messages"""
-        # Pattern for link start message
-        link_start_pattern = r'Your ship has started the link process with CONCORD Rogue Analysis Beacon'
+        # Updated patterns based on actual EVE Online log messages
+        # Pattern for link start message - more flexible matching
+        link_start_pattern = r'\[CONCORD\].*Rogue Analysis Beacon.*link.*established'
         
-        # Pattern for link completion message
-        link_complete_pattern = r'Your ship successfully completed the link process with CONCORD Rogue Analysis Beacon'
+        # Pattern for link completion message - more flexible matching
+        link_complete_pattern = r'\[CONCORD\].*Rogue Analysis Beacon.*link.*completed'
         
-        if re.search(link_start_pattern, line, re.IGNORECASE):
+        # Also check for alternative patterns that might exist
+        alt_link_start_pattern = r'Your ship has started the link process with CONCORD Rogue Analysis Beacon'
+        alt_link_complete_pattern = r'Your ship successfully completed the link process with CONCORD Rogue Analysis Beacon'
+        
+        if re.search(link_start_pattern, line, re.IGNORECASE) or re.search(alt_link_start_pattern, line, re.IGNORECASE):
             print("🔗 CONCORD link process started detected")
             return "link_start"
-        elif re.search(link_complete_pattern, line, re.IGNORECASE):
+        elif re.search(link_complete_pattern, line, re.IGNORECASE) or re.search(alt_link_complete_pattern, line, re.IGNORECASE):
             print("✅ CONCORD link process completed detected")
             return "link_complete"
         
@@ -1805,9 +1810,18 @@ class EVELogReader:
                 # Submit to Google Form (if configured)
                 if self.logger:
                     self.logger.info("Calling Google Form submission")
+                else:
+                    print("🌐 Starting Google Form submission...")
+                    print(f"📊 Session data keys: {list(session_data.keys())}")
+                    print(f"📁 Current working directory: {os.getcwd()}")
+                    print(f"📁 Config file exists: {os.path.exists('google_form_config.json')}")
+                
                 form_submitted = self.submit_to_google_form(session_data)
+                
                 if self.logger:
                     self.logger.info(f"Google Form submission result: {form_submitted}")
+                else:
+                    print(f"🌐 Google Form submission result: {form_submitted}")
                 
                 # Stop the countdown
                 self.stop_concord_countdown = True
@@ -1983,6 +1997,13 @@ class EVELogReader:
                     writer.writerow(header)
                 
                 # Write session data
+                # Use current time with fallback for timestamp
+                try:
+                    export_time = self.get_utc_now().strftime('%Y-%m-%d %H:%M:%S')
+                except AttributeError:
+                    from datetime import datetime, timezone
+                    export_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                
                 row = [
                     session_data['beacon_id'],
                     session_data['beacon_start'],
@@ -1994,7 +2015,7 @@ class EVELogReader:
                     session_data['total_loot_value'],
                     session_data['loot_details'],
                     session_data['source_file'],
-                    self.get_utc_now().strftime('%Y-%m-%d %H:%M:%S')
+                    export_time
                 ]
                 writer.writerow(row)
             
@@ -2933,14 +2954,26 @@ class EVELogReader:
             if self.logger:
                 self.logger.info("Starting Google Form submission process")
                 self.logger.debug(f"Session data received: {session_data}")
+            else:
+                print("🌐 Starting Google Form submission process")
+                print(f"📊 Session data received: {session_data}")
+                print(f"📁 Current working directory: {os.getcwd()}")
+                print(f"📁 Config file path: {os.path.abspath('google_form_config.json')}")
             
             # Load Google Form configuration
-            config_file = "google_form_config.json"
+            # Use absolute path to ensure we find the config file regardless of working directory
+            config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "google_form_config.json")
+            if self.logger:
+                self.logger.debug(f"Looking for config file at: {config_file}")
+            else:
+                print(f"🔍 Looking for config file at: {config_file}")
+            
             if not os.path.exists(config_file):
                 if self.logger:
                     self.logger.warning("Google Form configuration not found - skipping form submission")
                 else:
                     print("⚠️ Google Form configuration not found - skipping form submission")
+                    print(f"📁 Files in current directory: {os.listdir('.')}")
                 return False
             
             with open(config_file, 'r', encoding='utf-8') as f:
@@ -2988,12 +3021,21 @@ class EVELogReader:
                 data_key = field_to_data_mapping.get(field_name)
                 if data_key and data_key in session_data:
                     # Special handling for Loot Details - format as readable text
-                    if field_name == "Loot Details" and isinstance(session_data[data_key], list):
-                        # Format loot list as readable text
-                        loot_text = []
-                        for item in session_data[data_key]:
-                            loot_text.append(f"{item['name']} x{item['amount']} ({item['category']}) - {item['volume']} = {item['value']:,.2f} ISK")
-                        form_fields[entry_id] = "\n".join(loot_text)
+                    if field_name == "Loot Details":
+                        loot_value = session_data[data_key]
+                        if isinstance(loot_value, list) and loot_value:
+                            # Format loot list as readable text
+                            loot_text = []
+                            for item in loot_value:
+                                if isinstance(item, dict) and all(key in item for key in ['name', 'amount', 'category', 'volume', 'value']):
+                                    loot_text.append(f"{item['name']} x{item['amount']} ({item['category']}) - {item['volume']} = {item['value']:,.2f} ISK")
+                                else:
+                                    loot_text.append(str(item))
+                            form_fields[entry_id] = "\n".join(loot_text) if loot_text else "No loot data"
+                        elif isinstance(loot_value, str) and loot_value.strip():
+                            form_fields[entry_id] = loot_value
+                        else:
+                            form_fields[entry_id] = "No loot data"
                     else:
                         form_fields[entry_id] = session_data[data_key]
                     
@@ -3021,6 +3063,8 @@ class EVELogReader:
                 print(f"📊 Form data: {form_fields}")
                 print(f"📋 Session data keys available: {list(session_data.keys())}")
                 print(f"🔍 Session data for debugging: {session_data}")
+                print(f"🔗 Field mappings: {field_mappings}")
+                print(f"🔗 Data mapping: {field_to_data_mapping}")
             
             # Submit the form
             response = requests.post(form_url, data=form_fields, timeout=30)
@@ -3034,6 +3078,7 @@ class EVELogReader:
                     self.logger.info("✅ Data submitted to Google Form successfully!")
                 else:
                     print("✅ Data submitted to Google Form successfully!")
+                    print(f"📡 Response length: {len(response.text)} characters")
                 return True
             else:
                 if self.logger:
@@ -3041,6 +3086,7 @@ class EVELogReader:
                     self.logger.error(f"Response content: {response.text}")
                 else:
                     print(f"❌ Form submission failed: HTTP {response.status_code}")
+                    print(f"📡 Response content: {response.text[:200]}...")
                 return False
                 
         except FileNotFoundError:
