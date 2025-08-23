@@ -13,7 +13,7 @@ import requests  # New import for Google Form submission
 import logging  # New import for file logging
 
 # Application version
-APP_VERSION = "0.6.5"
+APP_VERSION = "0.6.6"
 
 # Timezone handling: All timestamps are handled in UTC to match EVE Online log format
 # EVE Online logs use UTC timestamps, so we maintain UTC throughout the system
@@ -1790,33 +1790,10 @@ class EVELogReader:
                     messagebox.showerror("Error", "Beacon start time has been lost. Please restart the beacon session.")
                     return
                 
-                # Try to find the actual beacon end time from log files
-                beacon_end_time = self.find_beacon_end_timestamp(self.concord_link_start, self.beacon_source_file)
-                if not beacon_end_time:
-                    # Fall back to current time if we can't find the actual end time
-                    beacon_end_time = self.get_utc_now()
-                    print(f"⚠️ Could not find actual beacon end time in logs, using current UTC time: {beacon_end_time}")
-                    print(f"💡 Tip: If you know when the beacon actually ended, you can manually set the end time")
-                    
-                    # Ask user if they want to manually set the end time
-                    result = messagebox.askyesno(
-                        "Beacon End Time Not Found", 
-                        f"Could not automatically determine when the beacon ended.\n\n"
-                        f"Beacon start: {self.concord_link_start.strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
-                        f"Current time: {beacon_end_time.strftime('%Y-%m-%d %H:%M:%S')} UTC\n\n"
-                        f"Would you like to manually specify when the beacon ended?\n"
-                        f"(This will give you more accurate duration calculations)"
-                    )
-                    
-                    if result:
-                        # For now, just show a message - TODO: implement time picker
-                        messagebox.showinfo(
-                            "Manual End Time", 
-                            "Manual end time setting will be implemented in a future update.\n\n"
-                            "For now, the system will use the current time as the beacon end time."
-                        )
-                else:
-                    print(f"✅ Found actual beacon end time in logs: {beacon_end_time}")
+                # Use Submit Data button timestamp as beacon end time
+                beacon_end_time = submit_timestamp
+                print(f"✅ Using Submit Data button timestamp as beacon end time: {beacon_end_time}")
+                print(f"💡 Beacon session duration: {beacon_end_time - self.concord_link_start}")
                 
                 # Debug logging for time calculation
                 if self.logger:
@@ -1825,8 +1802,8 @@ class EVELogReader:
                 
                 # Additional debug info for timing issues
                 print(f"🔍 Debug: Beacon start time: {self.concord_link_start} (UTC)")
-                print(f"🔍 Debug: Beacon end time: {beacon_end_time} (UTC)")
-                print(f"🔍 Debug: Current UTC time: {self.get_utc_now()} (UTC)")
+                print(f"🔍 Debug: Beacon end time (Submit Data): {beacon_end_time} (UTC)")
+                print(f"🔍 Debug: Submit Data button clicked at: {submit_timestamp} (UTC)")
                 print(f"🔍 Debug: Timezone info - Start: {self.concord_link_start.tzinfo}, End: {beacon_end_time.tzinfo}")
                 
                 total_beacon_time = beacon_end_time - self.concord_link_start
