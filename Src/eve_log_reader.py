@@ -64,6 +64,8 @@ class EVELogReader:
         
         # Popup prevention system to avoid spam
         self._expired_beacon_popup_shown = False  # Prevent multiple expired beacon popups
+        self._tracked_beacon_hashes = set()  # Track beacon hashes to prevent duplicate popups
+        self._startup_popup_shown = False  # Only show expired beacon popups on startup
         
         # Settings for recent file filtering
         self.max_days_old = 1  # Only show logs from last 24 hours by default
@@ -991,10 +993,8 @@ class EVELogReader:
         try:
             current_time = self.get_utc_now()
             
-            # Prevent multiple popups for the same expired beacon
-            # Check if we've already shown a popup for this beacon
-            if hasattr(self, '_expired_beacon_popup_shown') and self._expired_beacon_popup_shown:
-                print("⏰ Expired beacon popup already shown - skipping to prevent spam")
+            # Only show expired beacon popups on startup, not during log updates
+            if self._startup_popup_shown:
                 return
             
             # Look for beacon start messages that are between 1-5 minutes old
@@ -1010,10 +1010,18 @@ class EVELogReader:
                     
                     # Check if beacon is between 1-5 minutes old (expired but recent)
                     if 1.0 < time_since_start_minutes <= 5.0:
+                        # Generate a unique hash for this beacon to prevent duplicate popups
+                        beacon_hash = self.generate_beacon_hash(source_file, timestamp, line)
+                        
+                        # Check if we've already shown a popup for this specific beacon
+                        if beacon_hash in self._tracked_beacon_hashes:
+                            print(f"⏰ Beacon {beacon_hash[:8]} already processed - skipping duplicate popup")
+                            continue
+                        
                         print(f"⏰ Found expired but recent beacon ({time_since_start_minutes:.1f} minutes old) - offering to track")
                         
-                        # Mark that we've shown a popup to prevent spam
-                        self._expired_beacon_popup_shown = True
+                        # Mark this beacon as processed
+                        self._tracked_beacon_hashes.add(beacon_hash)
                         
                         # Ask user if they want to track this expired beacon
                         result = messagebox.askyesno(
@@ -1049,20 +1057,29 @@ class EVELogReader:
                             
                             # Update displays
                             self.update_concord_display()
-                            self.update_bounty_display()
+                            self.update_crab_display()
                             
-                            print(f"🔗 Started tracking expired beacon - ID: {self.current_beacon_id}")
-                            print(f"📁 Source file: {self.beacon_source_file}")
-                            print(f"⏰ Started {time_since_start_minutes:.1f} minutes ago (expired)")
-                            
-                            # Only offer one expired beacon
-                            break
+                            print(f"✅ Expired beacon tracking started for beacon {self.current_beacon_id}")
                         else:
                             print(f"❌ User declined to track expired beacon")
-                            break
+                        
+                        # Mark startup popup as shown to prevent future popups during this session
+                        self._startup_popup_shown = True
+                        break  # Only show one expired beacon popup per startup
             
         except Exception as e:
-            print(f"Error checking for expired beacons: {e}")
+            print(f"❌ Error checking for expired beacons: {e}")
+    
+    def generate_beacon_hash(self, source_file, timestamp, line):
+        """Generate a unique hash for a beacon to prevent duplicate popups"""
+        try:
+            # Create a unique identifier based on file, timestamp, and line content
+            hash_input = f"{source_file}:{timestamp}:{line}"
+            return hashlib.md5(hash_input.encode()).hexdigest()
+        except Exception as e:
+            print(f"❌ Error generating beacon hash: {e}")
+            # Fallback to timestamp-based hash
+            return hashlib.md5(f"{timestamp}".encode()).hexdigest()
     
     def scan_for_active_crab_beacons_on_startup(self):
         """Scan for active CRAB beacons when the app first starts up"""
@@ -1106,6 +1123,10 @@ class EVELogReader:
                 
                 # Set to ready status
                 self.root.after(2000, lambda: self.status_var.set(f"v{APP_VERSION} | Ready - Monitoring recent log files only"))
+            
+            # After startup scan, check for expired beacons and set startup popup flag
+            self.check_for_expired_but_recent_beacons()
+            self._startup_popup_shown = True  # Mark startup popup as shown
             
         except Exception as e:
             print(f"Error during startup CRAB scan: {e}")
@@ -1642,6 +1663,7 @@ class EVELogReader:
         
         # Reset popup prevention flag to allow new expired beacon detection
         self._expired_beacon_popup_shown = False
+        self._startup_popup_shown = False  # Allow expired beacon popups on next startup
         
         # Reset CRAB tracking
         self.reset_crab_bounty_tracking()
@@ -1729,6 +1751,17 @@ class EVELogReader:
         if not self.concord_link_start:
             messagebox.showwarning("End CRAB Submit", "No CRAB session is currently running.")
             return
+        
+        # Log Submit Data button click with timestamp
+        submit_timestamp = self.get_utc_now()
+        submit_log_msg = f"🔄 SUBMIT DATA BUTTON CLICKED at {submit_timestamp.strftime('%Y-%m-%d %H:%M:%S')} UTC"
+        print(submit_log_msg)
+        if self.logger:
+            self.logger.info(submit_log_msg)
+        
+        # Add to export logs
+        submit_log_entry = f"(SUBMIT_DATA) {submit_log_msg}"
+        self.all_log_entries.append((submit_timestamp, submit_log_entry, "SUBMIT_BUTTON"))
         
         # Ask for confirmation
         result = messagebox.askyesno(
@@ -1897,7 +1930,7 @@ class EVELogReader:
                 )
     
     def parse_clipboard_loot(self, clipboard_text):
-        """Parse loot data from clipboard text"""
+        """Parse loot data from clipboard text - handles multiple formats"""
         loot_data = {
             'rogue_drone_data': 0,
             'rogue_drone_data_value': 0,
@@ -1906,57 +1939,61 @@ class EVELogReader:
         }
         
         try:
-            print(f" Raw clipboard data: {repr(clipboard_text)}")  # Debug: show raw data
+            print(f"🔍 Raw clipboard data: {repr(clipboard_text)}")  # Debug: show raw data
             
             lines = clipboard_text.strip().split('\n')
-            print(f" Clipboard has {len(lines)} lines")
+            print(f"📋 Clipboard has {len(lines)} lines")
             
             for i, line in enumerate(lines):
                 line = line.strip()
                 if not line:
                     continue
                 
-                print(f" Processing line {i+1}: {repr(line)}")
+                print(f"🔍 Processing line {i+1}: {repr(line)}")
                 
-                # More flexible parsing - handle different spacing patterns
-                # First try the original 4-space split
-                parts = [part.strip() for part in line.split('        ') if part.strip()]
+                # Handle multiple loot formats:
+                # Format 1: "Item Name    Amount    Category    Volume    Value" (tab or multiple spaces)
+                # Format 2: "Item Name    Amount" (tab or multiple spaces)
+                # Format 3: "Item Name*    Amount" (with asterisk)
+                # Format 4: "Item Name    Amount" (with spaces in amount like "1 501")
                 
-                # If that doesn't work, try splitting by multiple spaces
-                if len(parts) < 5:
-                    parts = [part.strip() for part in line.split('  ') if part.strip()]
+                # First, try to split by tab
+                if '\t' in line:
+                    parts = line.split('\t')
+                else:
+                    # Split by multiple spaces (2 or more)
+                    parts = re.split(r'\s{2,}', line)
                 
-                # If still not enough parts, try single space split and filter empty
-                if len(parts) < 5:
-                    parts = [part.strip() for part in line.split(' ') if part.strip()]
-                
+                # Clean up parts
+                parts = [part.strip() for part in parts if part.strip()]
                 print(f"🔍 Line {i+1} parsed into {len(parts)} parts: {parts}")
                 
-                if len(parts) >= 5:
+                if len(parts) >= 2:
                     item_name = parts[0]
-                    amount_str = parts[1]
-                    category = parts[2]
-                    volume = parts[3]
-                    value_str = parts[4]
+                    amount_str = parts[1] if len(parts) > 1 else "1"
                     
-                    # Parse amount (remove any non-numeric characters)
+                    # Clean item name (remove asterisks and other special characters)
+                    item_name = item_name.replace('*', '').strip()
+                    
+                    # Parse amount - handle cases like "1 501" (space-separated numbers)
+                    # Remove commas and spaces, then combine numbers
+                    amount_str = amount_str.replace(',', '').replace(' ', '')
                     try:
-                        amount = int(amount_str.replace(',', ''))
+                        amount = int(amount_str)
                     except ValueError:
                         amount = 1
-                    
-                    # Parse value (remove "ISK" and spaces, convert to float)
-                    try:
-                        value_str_clean = value_str.replace('ISK', '').replace(' ', '').replace(',', '.')
-                        value = float(value_str_clean)
-                    except ValueError:
-                        value = 0
+                        print(f"⚠️ Could not parse amount '{parts[1]}', defaulting to 1")
                     
                     # Check if this is Rogue Drone Infestation Data
                     if "Rogue Drone Infestation Data" in item_name:
                         loot_data['rogue_drone_data'] = amount
-                        loot_data['rogue_drone_data_value'] = value
-                        print(f"🔍 Found Rogue Drone Infestation Data: {amount} units = {value:,.2f} ISK")
+                        # Set a reasonable value per unit (this should come from market data)
+                        loot_data['rogue_drone_data_value'] = amount * 100000  # 100k ISK per unit as placeholder
+                        print(f"🔍 Found Rogue Drone Infestation Data: {amount} units = {loot_data['rogue_drone_data_value']:,.2f} ISK")
+                    
+                    # For now, we'll use placeholder values since the user's format doesn't include prices
+                    # In a real scenario, these would come from EVE Online's market data
+                    value = 0  # Will be calculated later if needed
                     
                     # Add to total value
                     loot_data['total_value'] += value
@@ -1965,14 +2002,14 @@ class EVELogReader:
                     loot_data['all_loot'].append({
                         'name': item_name,
                         'amount': amount,
-                        'category': category,
-                        'volume': volume,
+                        'category': 'Unknown',  # Not provided in user's format
+                        'volume': 'Unknown',    # Not provided in user's format
                         'value': value
                     })
                     
-                    print(f" Loot parsed: {item_name} x{amount} = {value:,.2f} ISK")
+                    print(f"✅ Loot parsed: {item_name} x{amount}")
                 else:
-                    print(f"⚠️ Line {i+1} has insufficient parts ({len(parts)} < 5): {parts}")
+                    print(f"⚠️ Line {i+1} has insufficient parts ({len(parts)} < 2): {parts}")
             
             print(f"💰 Total loot value: {loot_data['total_value']:,.2f} ISK")
             print(f"🔍 Rogue Drone Data: {loot_data['rogue_drone_data']} units = {loot_data['rogue_drone_data_value']:,.2f} ISK")
@@ -2750,6 +2787,8 @@ class EVELogReader:
         # This allows expired beacon detection for future sessions
         if hasattr(self, '_expired_beacon_popup_shown'):
             self._expired_beacon_popup_shown = False
+        if hasattr(self, '_startup_popup_shown'):
+            self._startup_popup_shown = False
         
         self.update_crab_bounty_display()
         print("🦀 CRAB bounty tracking session started")
