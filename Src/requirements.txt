@@ -4,6 +4,7 @@
 # Core build tool
 pyinstaller>=5.0.0
 requests
+psutil
 
 # Optional: UPX compression for smaller executables
 # upx-ucl>=4.0.0
