@@ -11,9 +11,10 @@ import hashlib
 import csv
 import requests  # New import for Google Form submission
 import logging  # New import for file logging
+import psutil  # For detecting active EVE processes
 
 # Application version
-APP_VERSION = "0.6.6"
+APP_VERSION = "0.6.7"
 
 # Timezone handling: All timestamps are handled in UTC to match EVE Online log format
 # EVE Online logs use UTC timestamps, so we maintain UTC throughout the system
@@ -67,6 +68,11 @@ class EVELogReader:
         self._tracked_beacon_hashes = set()  # Track beacon hashes to prevent duplicate popups
         self._startup_popup_shown = False  # Only show expired beacon popups on startup
         
+        # EVE client detection cache
+        self._active_eve_clients_cache = None
+        self._eve_clients_cache_time = None
+        self._eve_clients_cache_ttl = 30  # Cache for 30 seconds
+        
         # Settings for recent file filtering
         self.max_days_old = 1  # Only show logs from last 24 hours by default
         self.max_files_to_show = 20  # Maximum number of recent files to display
@@ -84,12 +90,167 @@ class EVELogReader:
         if self.high_freq_var.get():
             self.start_monitoring_only()
         
+        # Initialize EVE client status
+        self.refresh_eve_client_status()
+        
         # Initialize Google Form status display
         self.update_google_form_status_display()
     
     def get_utc_now(self):
         """Get current time in UTC"""
         return datetime.now(timezone.utc)
+    
+    def get_active_eve_clients(self):
+        """Get list of active EVE Online client processes and their log directories"""
+        # Check cache first
+        current_time = self.get_utc_now()
+        if (self._active_eve_clients_cache is not None and 
+            self._eve_clients_cache_time is not None and
+            (current_time - self._eve_clients_cache_time).total_seconds() < self._eve_clients_cache_ttl):
+            return self._active_eve_clients_cache
+        
+        active_clients = []
+        
+        try:
+            # Look for EVE Online processes (only basic info to avoid permission issues)
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    proc_info = proc.info
+                    proc_name = proc_info['name'].lower()
+                    
+                    # Check for EVE Online executable names
+                    if any(eve_name in proc_name for eve_name in ['eve.exe', 'exefile.exe']):
+                        # Get the process working directory (where logs are stored)
+                        try:
+                            working_dir = proc.cwd()
+                            log_dir = os.path.join(working_dir, 'logs')
+                            
+                            if os.path.exists(log_dir):
+                                active_clients.append({
+                                    'pid': proc_info['pid'],
+                                    'name': proc_info['name'],
+                                    'exe': None,  # Skip exe to avoid permission issues
+                                    'log_dir': log_dir,
+                                    'working_dir': working_dir
+                                })
+                                print(f"🎮 Found active EVE client: PID {proc_info['pid']} - {proc_info['name']}")
+                                print(f"   Log directory: {log_dir}")
+                        except (psutil.AccessDenied, psutil.NoSuchProcess):
+                            # Skip processes we can't access
+                            continue
+                            
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+                    
+        except Exception as e:
+            print(f"⚠️ Error detecting EVE processes: {e}")
+        
+        # If no active clients found, also check common EVE installation paths
+        if not active_clients:
+            print("🔍 No active EVE clients found, checking common installation paths...")
+            common_paths = [
+                os.path.expanduser("~/Documents/EVE/logs"),
+                os.path.expanduser("~/Documents/EVE Online/logs"),
+                os.path.expanduser("~/AppData/Local/eve-online/app-*/logs"),  # EVE Online app logs
+                "C:/Program Files/CCP/EVE/logs",
+                "C:/Program Files (x86)/CCP/EVE/logs"
+            ]
+            
+            for path_pattern in common_paths:
+                if '*' in path_pattern:
+                    # Handle glob patterns for EVE Online app directories
+                    import glob
+                    matching_paths = glob.glob(path_pattern)
+                    for path in matching_paths:
+                        if os.path.exists(path):
+                            active_clients.append({
+                                'pid': None,
+                                'name': 'EVE Online (App Path)',
+                                'exe': None,
+                                'log_dir': path,
+                                'working_dir': os.path.dirname(path)
+                            })
+                            print(f"📁 Found EVE logs at app path: {path}")
+                else:
+                    # Handle regular paths
+                    if os.path.exists(path_pattern):
+                        active_clients.append({
+                            'pid': None,
+                            'name': 'EVE Online (Common Path)',
+                            'exe': None,
+                            'log_dir': path_pattern,
+                            'working_dir': os.path.dirname(path_pattern)
+                        })
+                        print(f"📁 Found EVE logs at common path: {path_pattern}")
+        
+        # Update cache
+        self._active_eve_clients_cache = active_clients
+        self._eve_clients_cache_time = current_time
+        
+        return active_clients
+    
+    def is_log_from_active_client(self, log_file_path):
+        """Check if a log file belongs to an active EVE client"""
+        try:
+            # Get active EVE clients
+            active_clients = self.get_active_eve_clients()
+            
+            if not active_clients:
+                # If no active clients, allow all logs (fallback behavior)
+                return True
+            
+            # Check if this log file is in any active client's log directory
+            log_file_path = os.path.abspath(log_file_path)
+            for client in active_clients:
+                client_log_dir = os.path.abspath(client['log_dir'])
+                if log_file_path.startswith(client_log_dir):
+                    return True
+            
+            # If not from active client, check if it's very recent (within last 5 minutes)
+            # This handles cases where a client just closed but logs are still fresh
+            if os.path.exists(log_file_path):
+                mtime = os.path.getmtime(log_file_path)
+                mtime_dt = datetime.fromtimestamp(mtime, tz=timezone.utc)
+                current_time = self.get_utc_now()
+                time_diff = (current_time - mtime_dt).total_seconds()
+                
+                if time_diff < 300:  # 5 minutes
+                    print(f"📝 Allowing recent log from inactive client: {os.path.basename(log_file_path)} ({time_diff:.0f}s old)")
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"⚠️ Error checking if log is from active client: {e}")
+            # On error, allow the log (safe fallback)
+            return True
+    
+    def refresh_eve_client_status(self):
+        """Refresh the display of active EVE clients"""
+        try:
+            active_clients = self.get_active_eve_clients()
+            
+            if active_clients:
+                status_text = f"Active EVE Clients: {len(active_clients)}"
+                for i, client in enumerate(active_clients):
+                    if i == 0:
+                        status_text += f" | {client['name']}"
+                        if client['pid']:
+                            status_text += f" (PID: {client['pid']})"
+                    else:
+                        status_text += f", {client['name']}"
+                        if client['pid']:
+                            status_text += f" (PID: {client['pid']})"
+                
+                self.eve_status_var.set(status_text)
+                print(f"🎮 EVE Client Status Updated: {status_text}")
+            else:
+                self.eve_status_var.set("No active EVE clients found - monitoring all logs")
+                print("⚠️ No active EVE clients found - falling back to monitoring all logs")
+                
+        except Exception as e:
+            self.eve_status_var.set(f"Error checking EVE clients: {str(e)}")
+            print(f"❌ Error refreshing EVE client status: {e}")
     
     def setup_logging(self):
         """Setup logging for Google Form debugging"""
@@ -219,7 +380,7 @@ class EVELogReader:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(4, weight=1)  # Updated to account for version label
+        main_frame.rowconfigure(6, weight=1)  # Updated to account for version label, EVE status, and CRAB bounty
         
         # Version label
         version_label = ttk.Label(main_frame, text=f"Version {APP_VERSION}", 
@@ -295,12 +456,29 @@ class EVELogReader:
                              font=("Segoe UI", 9))
         apply_btn.grid(row=0, column=4)
         
+        # Active EVE clients status
+        eve_status_frame = ttk.LabelFrame(main_frame, text="🎮 Active EVE Clients", padding="5")
+        eve_status_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        self.eve_status_var = tk.StringVar(value="Checking for active EVE clients...")
+        eve_status_label = ttk.Label(eve_status_frame, textvariable=self.eve_status_var, 
+                                    font=("Segoe UI", 9))
+        eve_status_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 20))
+        
+        refresh_eve_btn = tk.Button(eve_status_frame, text="Refresh EVE Status", command=self.refresh_eve_client_status,
+                                   bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
+                                   activebackground="#404040",   # Darker when clicked
+                                   activeforeground="#ffffff",  # White text when clicked
+                                   relief="raised", borderwidth=1,
+                                   font=("Segoe UI", 9))
+        refresh_eve_btn.grid(row=0, column=1, padx=(20, 0))
+        
         # File monitoring status
-        ttk.Label(main_frame, text="Recent Logs (UTC Timestamp Based):").grid(row=4, column=0, sticky=tk.W, pady=(10, 5))
+        ttk.Label(main_frame, text="Recent Logs (UTC Timestamp Based):").grid(row=5, column=0, sticky=tk.W, pady=(10, 5))
         
         # Bounty tracking display
         bounty_frame = ttk.LabelFrame(main_frame, text="💰 Bounty Tracking", padding="5")
-        bounty_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        bounty_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         # Bounty info labels
         self.bounty_total_var = tk.StringVar(value="Total ISK Earned: 0 ISK")
@@ -335,7 +513,7 @@ class EVELogReader:
         
         # CONCORD Rogue Analysis Beacon tracking display
         concord_frame = ttk.LabelFrame(main_frame, text="🔗 CONCORD Rogue Analysis Beacon", padding="5")
-        concord_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        concord_frame.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         # CONCORD status labels
         self.concord_status_var = tk.StringVar(value="Status: Inactive")
@@ -436,7 +614,7 @@ class EVELogReader:
         
         # CRAB Bounty Tracking display
         crab_bounty_frame = ttk.LabelFrame(main_frame, text="🦀 CRAB Bounty Tracking", padding="5")
-        crab_bounty_frame.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        crab_bounty_frame.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         # CRAB bounty info labels
         self.crab_bounty_total_var = tk.StringVar(value="CRAB Total ISK: 0 ISK")
@@ -479,7 +657,7 @@ class EVELogReader:
         add_crab_bounty_btn.grid(row=0, column=5, padx=(20, 0))
         
         status_frame = ttk.Frame(main_frame)
-        status_frame.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        status_frame.grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         # Create text widget with scrollbar for combined logs
         self.text_widget = tk.Text(status_frame, wrap=tk.WORD, height=25,
@@ -503,7 +681,7 @@ class EVELogReader:
         # Status bar
         self.status_var = tk.StringVar(value="Starting up - Scanning for active CRAB beacons...")
         status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN)
-        status_bar.grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
+        status_bar.grid(row=10, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
         
         # Apply dark styling to status bar
         style = ttk.Style()
@@ -517,7 +695,7 @@ class EVELogReader:
         
         # Control buttons
         control_frame = ttk.Frame(main_frame)
-        control_frame.grid(row=10, column=0, columnspan=2, pady=(10, 0))
+        control_frame.grid(row=11, column=0, columnspan=2, pady=(10, 0))
         
         # High-frequency monitoring checkbox
         self.high_freq_var = tk.BooleanVar(value=True)
@@ -748,6 +926,7 @@ class EVELogReader:
             
             current_time = self.get_utc_now()
             active_beacon_found = False
+            all_beacon_sessions = []  # Store all beacon sessions found
             
             # Look for CONCORD link start messages in recent logs
             for timestamp, line, source_file in self.all_log_entries:
@@ -762,24 +941,89 @@ class EVELogReader:
                     
                     print(f"🔗 Found CONCORD beacon start message from {time_since_start_minutes:.1f} minutes ago")
                     
+                    # Store this beacon session for comparison
+                    beacon_session = {
+                        'type': 'start',
+                        'timestamp': timestamp,
+                        'source_file': source_file,
+                        'time_since_start_minutes': time_since_start_minutes,
+                        'is_active': time_since_start_minutes <= 1.0
+                    }
+                    all_beacon_sessions.append(beacon_session)
+                    
                     # Only auto-start tracking if beacon started less than 1 minute ago
                     if time_since_start_minutes <= 1.0:
-                        print(f"✅ Beacon started {time_since_start_minutes:.1f} minutes ago - auto-starting CRAB tracking")
+                        print(f"✅ Beacon started {time_since_start_minutes:.1f} minutes ago - marking as active")
+                    else:
+                        print(f"⏰ Beacon started {time_since_start_minutes:.1f} minutes ago - too old to auto-track")
+                
+                elif concord_message_type == "link_complete":
+                    # If we find a completion message, check if it's recent enough to consider the beacon still active
+                    time_since_completion = current_time - timestamp
+                    time_since_completion_minutes = time_since_completion.total_seconds() / 60
+                    
+                    print(f"✅ Found CONCORD beacon completion message from {time_since_completion_minutes:.1f} minutes ago")
+                    
+                    # Look for the corresponding start message
+                    start_timestamp = self.find_beacon_start_timestamp(timestamp, source_file)
+                    if start_timestamp:
+                        time_since_start = current_time - start_timestamp
+                        time_since_start_minutes = time_since_start.total_seconds() / 60
+                        
+                        # Store this completed beacon session for comparison
+                        beacon_session = {
+                            'type': 'completed',
+                            'start_timestamp': start_timestamp,
+                            'completion_timestamp': timestamp,
+                            'source_file': source_file,
+                            'time_since_start_minutes': time_since_start_minutes,
+                            'time_since_completion_minutes': time_since_completion_minutes,
+                            'is_active': time_since_completion_minutes <= 1.0
+                        }
+                        all_beacon_sessions.append(beacon_session)
+                        
+                        if time_since_completion_minutes <= 1.0:
+                            print(f"✅ Beacon session completed recently - marking as active")
+                        else:
+                            print(f"⏰ Beacon session too old ({time_since_start_minutes:.1f} minutes) - not auto-tracking")
+                    else:
+                        print(f"⚠️ Could not find start timestamp for completed beacon")
+            
+            # Now find the most recent active beacon session
+            if all_beacon_sessions:
+                print(f"🔍 Found {len(all_beacon_sessions)} total beacon sessions")
+                
+                # Filter for active sessions (started or completed within 1 minute)
+                active_sessions = [s for s in all_beacon_sessions if s['is_active']]
+                
+                if active_sessions:
+                    print(f"✅ Found {len(active_sessions)} active beacon sessions")
+                    
+                    # Sort by start timestamp (most recent first)
+                    active_sessions.sort(key=lambda x: x.get('start_timestamp', x['timestamp']), reverse=True)
+                    
+                    # Use the most recent active session
+                    most_recent_session = active_sessions[0]
+                    print(f"🎯 Selected most recent active session: {most_recent_session['type']} from {most_recent_session['time_since_start_minutes']:.1f} minutes ago")
+                    
+                    if most_recent_session['type'] == 'start':
+                        # Start tracking this active beacon
+                        beacon_timestamp = most_recent_session['timestamp']
+                        source_file = most_recent_session['source_file']
                         
                         # Validate that the beacon timestamp is not in the future
-                        current_time = self.get_utc_now()
-                        beacon_timestamp = timestamp
                         if beacon_timestamp > current_time:
-                            print(f"⚠️ Warning: Auto-scan beacon timestamp {beacon_timestamp} is in the future, using current time instead")
+                            print(f"⚠️ Warning: Most recent beacon timestamp {beacon_timestamp} is in the future, using current time instead")
                             beacon_timestamp = current_time
                         
                         # Set up beacon tracking
                         self.concord_link_start = beacon_timestamp
                         self.concord_status_var.set("Status: Linking")
                         self.concord_countdown_active = True
+                        self.concord_link_completed = False
                         
                         # Generate unique Beacon ID
-                        self.current_beacon_id = self.generate_beacon_id(source_file, timestamp)
+                        self.current_beacon_id = self.generate_beacon_id(source_file, beacon_timestamp)
                         self.beacon_source_file = source_file
                         
                         # Start CRAB bounty tracking session
@@ -793,127 +1037,59 @@ class EVELogReader:
                         self.update_bounty_display()
                         
                         active_beacon_found = True
-                        print(f"🔗 Auto-started CRAB beacon tracking - ID: {self.current_beacon_id}")
+                        print(f"🔗 Auto-started CRAB beacon tracking for most recent session - ID: {self.current_beacon_id}")
                         print(f"📁 Source file: {self.beacon_source_file}")
-                        print(f"⏰ Started {time_since_start_minutes:.1f} minutes ago")
+                        print(f"⏰ Started {most_recent_session['time_since_start_minutes']:.1f} minutes ago")
                         
-                        # Only track the first active beacon found
-                        break
-                    else:
-                        print(f"⏰ Beacon started {time_since_start_minutes:.1f} minutes ago - too old to auto-track")
-                
-                elif concord_message_type == "link_complete":
-                    # If we find a completion message, check if it's recent enough to consider the beacon still active
-                    time_since_completion = current_time - timestamp
-                    time_since_completion_minutes = time_since_completion.total_seconds() / 60
+                    elif most_recent_session['type'] == 'completed':
+                        # Start tracking this completed beacon
+                        beacon_timestamp = most_recent_session['start_timestamp']
+                        source_file = most_recent_session['source_file']
+                        
+                        # Validate that the beacon timestamp is not in the future
+                        if beacon_timestamp > current_time:
+                            print(f"⚠️ Warning: Most recent completed beacon timestamp {beacon_timestamp} is in the future, using current time instead")
+                            beacon_timestamp = current_time
+                        
+                        # Set up completed beacon tracking
+                        self.concord_link_start = beacon_timestamp
+                        self.concord_link_completed = True
+                        self.concord_status_var.set("Status: Active")
+                        self.concord_countdown_active = True
+                        
+                        # Generate unique Beacon ID
+                        self.current_beacon_id = self.generate_beacon_id(source_file, beacon_timestamp)
+                        self.beacon_source_file = source_file
+                        
+                        # Start CRAB bounty tracking session
+                        self.start_crab_session()
+                        
+                        # Start countdown timer (will show elapsed time)
+                        self.start_concord_countdown()
+                        
+                        # Update displays
+                        self.update_concord_display()
+                        self.update_bounty_display()
+                        
+                        active_beacon_found = True
+                        print(f"🔗 Auto-started completed CRAB beacon tracking for most recent session - ID: {self.current_beacon_id}")
+                        print(f"📁 Source file: {self.beacon_source_file}")
+                        print(f"⏰ Started {most_recent_session['time_since_start_minutes']:.1f} minutes ago, completed {most_recent_session['time_since_completion_minutes']:.1f} minutes ago")
+                else:
+                    print("⏰ No active beacon sessions found (all are too old)")
                     
-                    print(f"✅ Found CONCORD beacon completion message from {time_since_completion_minutes:.1f} minutes ago")
-                    
-                    # Only consider it active if completed less than 1 minute ago
-                    if time_since_completion_minutes <= 1.0:
-                        print(f"✅ Beacon completed {time_since_completion_minutes:.1f} minutes ago - checking if we should track it")
-                        
-                        # Look for the corresponding start message
-                        start_timestamp = self.find_beacon_start_timestamp(timestamp, source_file)
-                        if start_timestamp:
-                            time_since_start = current_time - start_timestamp
-                            time_since_start_minutes = time_since_start.total_seconds() / 60
-                            
-                            if time_since_start_minutes <= 1.0:
-                                print(f"✅ Beacon session completed recently - auto-starting tracking")
-                                
-                                # Validate that the beacon timestamp is not in the future
-                                current_time = self.get_utc_now()
-                                beacon_timestamp = start_timestamp
-                                if beacon_timestamp > current_time:
-                                    print(f"⚠️ Warning: Completed beacon timestamp {beacon_timestamp} is in the future, using current time instead")
-                                    beacon_timestamp = current_time
-                                
-                                # Set up completed beacon tracking
-                                self.concord_link_start = beacon_timestamp
-                                self.concord_link_completed = True
-                                self.concord_status_var.set("Status: Active")
-                                self.concord_countdown_active = True
-                                
-                                # Generate unique Beacon ID
-                                self.current_beacon_id = self.generate_beacon_id(source_file, start_timestamp)
-                                self.beacon_source_file = source_file
-                                
-                                # Start CRAB bounty tracking session
-                                self.start_crab_session()
-                                
-                                # Start countdown timer (will show elapsed time)
-                                self.start_concord_countdown()
-                                
-                                # Update displays
-                                self.update_concord_display()
-                                self.update_bounty_display()
-                                
-                                active_beacon_found = True
-                                print(f"🔗 Auto-started completed CRAB beacon tracking - ID: {self.current_beacon_id}")
-                                print(f"📁 Source file: {self.beacon_source_file}")
-                                print(f"⏰ Started {time_since_start_minutes:.1f} minutes ago, completed {time_since_completion_minutes:.1f} minutes ago")
-                                
-                                # Only track the first active beacon found
-                                break
-                            else:
-                                print(f"⏰ Beacon session too old ({time_since_start_minutes:.1f} minutes) - not auto-tracking")
-                        else:
-                            print(f"⚠️ Could not find start timestamp for completed beacon")
-                
-                # Check for ongoing beacon sessions (started but not completed)
-                elif concord_message_type == "link_start":
-                    # We already handled link_start above, but let's also check if there's an ongoing session
-                    # that might have started recently but hasn't completed yet
-                    if not active_beacon_found:  # Only if we haven't found an active beacon yet
-                        time_since_start = current_time - timestamp
-                        time_since_start_minutes = time_since_start.total_seconds() / 60
-                        
-                        # Check if this is a very recent start (within 1 minute) that we should track
-                        if time_since_start_minutes <= 1.0:
-                            print(f"🔗 Found very recent beacon start ({time_since_start_minutes:.1f} minutes ago) - auto-starting tracking")
-                            
-                            # Validate that the beacon timestamp is not in the future
-                            current_time = self.get_utc_now()
-                            beacon_timestamp = timestamp
-                            if beacon_timestamp > current_time:
-                                print(f"⚠️ Warning: Very recent beacon timestamp {beacon_timestamp} is in the future, using current time instead")
-                                beacon_timestamp = current_time
-                            
-                            # Set up beacon tracking
-                            self.concord_link_start = beacon_timestamp
-                            self.concord_status_var.set("Status: Linking")
-                            self.concord_countdown_active = True
-                            
-                            # Generate unique Beacon ID
-                            self.current_beacon_id = self.generate_beacon_id(source_file, timestamp)
-                            self.beacon_source_file = source_file
-                            
-                            # Start CRAB bounty tracking session
-                            self.start_crab_session()
-                            
-                            # Start countdown timer
-                            self.start_concord_countdown()
-                            
-                            # Update displays
-                            self.update_concord_display()
-                            self.update_bounty_display()
-                            
-                            active_beacon_found = True
-                            print(f"🔗 Auto-started recent CRAB beacon tracking - ID: {self.current_beacon_id}")
-                            print(f"📁 Source file: {self.beacon_source_file}")
-                            print(f"⏰ Started {time_since_start_minutes:.1f} minutes ago")
-                            
-                            # Only track the first active beacon found
-                            break
-            
-            if not active_beacon_found:
-                print("  No active CRAB beacons found in recent logs")
+                    # Check for expired but recent beacon sessions that might still be worth tracking
+                    self.check_for_expired_but_recent_beacons()
+            else:
+                print("  No beacon sessions found in recent logs")
                 
                 # Check for expired but recent beacon sessions that might still be worth tracking
                 self.check_for_expired_but_recent_beacons()
+            
+            if active_beacon_found:
+                print(f"✅ Auto-started CRAB beacon tracking successfully for most recent session")
             else:
-                print(f"✅ Auto-started CRAB beacon tracking successfully")
+                print(f"✅ No active CRAB beacons to track")
                 
         except Exception as e:
             print(f"Error scanning for active CRAB beacons: {e}")
@@ -1153,7 +1329,12 @@ class EVELogReader:
             recent_files = []
             for log_file in all_log_files:
                 if self.is_recent_file(log_file):
-                    recent_files.append(log_file)
+                    # Only include logs from active EVE clients
+                    if self.is_log_from_active_client(log_file):
+                        recent_files.append(log_file)
+                        print(f"✅ Including log from active client: {log_file.name}")
+                    else:
+                        print(f"⏸️ Skipping log from inactive client: {log_file.name}")
             
             if not recent_files:
                 self.status_var.set("No recent log files found")
@@ -1209,52 +1390,29 @@ class EVELogReader:
                             
                             # Check for CONCORD link messages
                             concord_message_type = self.detect_concord_message(line)
-                            if concord_message_type == "link_start":
+                            if concord_message_type in ["link_start", "link_complete"]:
                                 # Use the actual timestamp from the log line, not current time
                                 beacon_timestamp = timestamp if timestamp else self.get_utc_now()
                                 
-                                # Validate that the beacon timestamp is not in the future
-                                current_time = self.get_utc_now()
-                                if beacon_timestamp > current_time:
-                                    print(f"⚠️ Warning: Beacon timestamp {beacon_timestamp} is in the future, using current time instead")
-                                    beacon_timestamp = current_time
+                                # Use the helper method to update beacon session only if newer
+                                self.update_beacon_session_if_newer(beacon_timestamp, source_file, concord_message_type)
                                 
-                                self.concord_link_start = beacon_timestamp
-                                
-                                # Debug logging for beacon start
+                                # Debug logging for beacon messages
                                 if self.logger:
-                                    self.logger.info(f"CONCORD beacon start detected")
+                                    self.logger.info(f"CONCORD beacon {concord_message_type} detected")
                                     self.logger.info(f"Log line timestamp: {timestamp}")
-                                    self.logger.info(f"Beacon timestamp set to: {beacon_timestamp}")
-                                    self.logger.info(f"Current time: {current_time}")
+                                    self.logger.info(f"Beacon timestamp: {beacon_timestamp}")
+                                    self.logger.info(f"Current time: {self.get_utc_now()}")
                                 
-                                self.concord_status_var.set("Status: Linking")
-                                self.concord_countdown_active = True
-                                
-                                # Generate unique Beacon ID
-                                self.current_beacon_id = self.generate_beacon_id(source_file, beacon_timestamp)
-                                self.beacon_source_file = source_file
-                                
-                                self.start_concord_countdown()
-                                # Start CRAB bounty tracking session
-                                self.start_crab_session()
-                                
-                                print(f"🔗 CONCORD Beacon started - ID: {self.current_beacon_id}")
-                                print(f"📁 Source file: {self.beacon_source_file}")
-                                print(f"⏰ Beacon start time: {beacon_timestamp}")
-                                print(f"⏰ Current time: {current_time}")
-                                
-                            elif concord_message_type == "link_complete":
-                                self.concord_link_completed = True
-                                self.concord_status_var.set("Status: Active")
-                                # Don't stop the countdown - let it continue to show total elapsed time
-                                # self.concord_countdown_active = False
-                                # self.stop_concord_countdown = True
-                                self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {self.get_utc_now().strftime('%H:%M:%S')}")
-                                self.update_concord_display()
-                                # CRAB session status will be updated by update_concord_display()
-                                
-                                print(f"✅ CONCORD Beacon completed - ID: {self.current_beacon_id}")
+                                if concord_message_type == "link_start":
+                                    print(f"🔗 CONCORD Beacon start detected - timestamp: {beacon_timestamp}")
+                                else:  # link_complete
+                                    print(f"✅ CONCORD Beacon completion detected - timestamp: {beacon_timestamp}")
+                                    
+                                    # Update the link time display for completed beacons
+                                    if self.concord_link_start:
+                                        self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {beacon_timestamp.strftime('%H:%M:%S')}")
+                                        self.update_concord_display()
                             
                             self.all_log_entries.append((timestamp, line, source_file))
                         
@@ -1372,6 +1530,9 @@ class EVELogReader:
                 for log_file in Path(self.eve_log_dir).glob(pattern):
                     file_path = str(log_file)
                     if os.path.exists(file_path) and self.is_recent_file(file_path):
+                        # Only monitor logs from active EVE clients
+                        if not self.is_log_from_active_client(file_path):
+                            continue
                         # Get current file stats
                         current_size = os.path.getsize(file_path)
                         current_mtime = os.path.getmtime(file_path)
@@ -3472,6 +3633,111 @@ For EVE Online players and ISK hunters
 © 2025 - EVE Log Reader Project"""
         
         messagebox.showinfo("Version Information", version_info)
+
+    def update_beacon_session_if_newer(self, new_beacon_timestamp, new_source_file, new_message_type):
+        """Update beacon session only if the new one is more recent than the current one"""
+        try:
+            current_time = self.get_utc_now()
+            
+            # If we don't have a current session, always start tracking
+            if not self.concord_link_start:
+                print(f"🔗 No current beacon session - starting new session")
+                self._start_new_beacon_session(new_beacon_timestamp, new_source_file, new_message_type)
+                return True
+            
+            # Check if the new beacon is more recent than the current one
+            time_diff = new_beacon_timestamp - self.concord_link_start
+            time_diff_minutes = time_diff.total_seconds() / 60
+            
+            if time_diff_minutes > 0:  # New beacon is more recent
+                print(f"🔗 New beacon session is {time_diff_minutes:.1f} minutes newer than current session")
+                print(f"🔄 Switching from old session ({self.concord_link_start.strftime('%H:%M:%S')}) to new session ({new_beacon_timestamp.strftime('%H:%M:%S')})")
+                
+                # Stop current session
+                self._stop_current_beacon_session()
+                
+                # Start new session
+                self._start_new_beacon_session(new_beacon_timestamp, new_source_file, new_message_type)
+                return True
+            else:
+                print(f"⏰ New beacon session is {abs(time_diff_minutes):.1f} minutes older than current session - keeping current session")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Error updating beacon session: {e}")
+            return False
+    
+    def _start_new_beacon_session(self, beacon_timestamp, source_file, message_type):
+        """Start a new beacon session"""
+        try:
+            current_time = self.get_utc_now()
+            
+            # Validate that the beacon timestamp is not in the future
+            if beacon_timestamp > current_time:
+                print(f"⚠️ Warning: Beacon timestamp {beacon_timestamp} is in the future, using current time instead")
+                beacon_timestamp = current_time
+            
+            # Set up beacon tracking
+            self.concord_link_start = beacon_timestamp
+            self.concord_link_completed = (message_type == "link_complete")
+            
+            if message_type == "link_start":
+                self.concord_status_var.set("Status: Linking")
+                self.concord_countdown_active = True
+                print(f"🔗 Starting new CONCORD beacon session - Status: Linking")
+            else:  # link_complete
+                self.concord_status_var.set("Status: Active")
+                self.concord_countdown_active = True
+                print(f"🔗 Starting new completed CONCORD beacon session - Status: Active")
+            
+            # Generate unique Beacon ID
+            self.current_beacon_id = self.generate_beacon_id(source_file, beacon_timestamp)
+            self.beacon_source_file = source_file
+            
+            # Start CRAB bounty tracking session
+            self.start_crab_session()
+            
+            # Start countdown timer
+            self.start_concord_countdown()
+            
+            # Update displays
+            self.update_concord_display()
+            self.update_bounty_display()
+            
+            print(f"🔗 New beacon session started - ID: {self.current_beacon_id}")
+            print(f"📁 Source file: {self.beacon_source_file}")
+            print(f"⏰ Beacon start time: {beacon_timestamp}")
+            
+        except Exception as e:
+            print(f"❌ Error starting new beacon session: {e}")
+    
+    def _stop_current_beacon_session(self):
+        """Stop the current beacon session"""
+        try:
+            if self.concord_countdown_active:
+                self.stop_concord_countdown = True
+                self.concord_countdown_active = False
+                print(f"⏹️ Stopped current beacon session countdown")
+            
+            # Clear current session data
+            self.concord_link_start = None
+            self.concord_link_completed = False
+            self.current_beacon_id = None
+            self.beacon_source_file = None
+            
+            # Stop CRAB session
+            if self.crab_session_active:
+                self.end_crab_session()
+                print(f"🦀 Ended current CRAB session")
+            
+            # Update displays
+            self.update_concord_display()
+            self.update_bounty_display()
+            
+            print(f"⏹️ Current beacon session stopped and cleared")
+            
+        except Exception as e:
+            print(f"❌ Error stopping current beacon session: {e}")
 
 def main():
     root = tk.Tk()
