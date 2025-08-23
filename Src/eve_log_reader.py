@@ -14,7 +14,13 @@ import logging  # New import for file logging
 import psutil  # For detecting active EVE processes
 
 # Application version
-APP_VERSION = "0.6.8"
+APP_VERSION = "0.6.9"
+
+# OPTION 1 IMPLEMENTATION: Multi-Account Bounty Tracking Fix
+# This version disables restrictive log filtering to ensure ALL EVE account bounties are tracked
+# Previously, the system would exclude log files it thought were "inactive", causing bounties
+# from other accounts to be missed. Now ALL recent log files are processed regardless of
+# which EVE process they appear to belong to.
 
 # Timezone handling: All timestamps are handled in UTC to match EVE Online log format
 # EVE Online logs use UTC timestamps, so we maintain UTC throughout the system
@@ -202,7 +208,11 @@ class EVELogReader:
         return active_clients
     
     def is_log_from_active_client(self, log_file_path):
-        """Check if a log file belongs to an active EVE client"""
+        """Check if a log file belongs to an active EVE client
+        
+        NOTE: This method is no longer used for restrictive filtering due to Option 1 implementation.
+        It's kept for potential future use but all log files are now processed regardless of client status.
+        """
         try:
             # Get active EVE clients
             active_clients = self.get_active_eve_clients()
@@ -243,22 +253,27 @@ class EVELogReader:
             active_clients = self.get_active_eve_clients()
             
             if active_clients:
-                status_text = f"Active EVE Clients: {len(active_clients)}"
-                for i, client in enumerate(active_clients):
-                    if i == 0:
-                        status_text += f" | {client['name']}"
-                        if client['pid']:
-                            status_text += f" (PID: {client['pid']})"
-                    else:
-                        status_text += f", {client['name']}"
-                        if client['pid']:
-                            status_text += f" (PID: {client['pid']})"
+                if len(active_clients) > 1:
+                    status_text = f"Multi-Account Setup: {len(active_clients)} EVE Accounts Active | OPTION 1: No Log Filtering"
+                    for i, client in enumerate(active_clients):
+                        if i == 0:
+                            status_text += f" | Account {client.get('account_number', i+1)}"
+                            if client['pid']:
+                                status_text += f" (PID: {client['pid']})"
+                        else:
+                            status_text += f", Account {client.get('account_number', i+1)}"
+                            if client['pid']:
+                                status_text += f" (PID: {client['pid']})"
+                else:
+                    status_text = f"Single EVE Account | OPTION 1: No Log Filtering"
+                    if active_clients[0]['pid']:
+                        status_text += f" (PID: {active_clients[0]['pid']})"
                 
                 self.eve_status_var.set(status_text)
                 print(f"🎮 EVE Client Status Updated: {status_text}")
             else:
-                self.eve_status_var.set("No active EVE clients found - monitoring all logs")
-                print("⚠️ No active EVE clients found - falling back to monitoring all logs")
+                self.eve_status_var.set("No active EVE clients found | OPTION 1: Monitoring ALL logs")
+                print("⚠️ No active EVE clients found - OPTION 1 active: monitoring ALL logs")
                 
         except Exception as e:
             self.eve_status_var.set(f"Error checking EVE clients: {str(e)}")
@@ -1321,7 +1336,7 @@ class EVELogReader:
             self.status_var.set(f"❌ Startup scan error: {str(e)}")
     
     def refresh_recent_logs(self):
-        """Refresh and combine only recent log files"""
+        """Refresh and combine recent log files - OPTION 1: No restrictive filtering, includes ALL recent logs"""
         try:
             self.status_var.set("Refreshing recent log files...")
             self.root.update()
@@ -1337,16 +1352,21 @@ class EVELogReader:
                 self.text_widget.insert(tk.END, "No log files found in the selected directory.")
                 return
             
-            # Filter for recent files only
+            # OPTION 1 IMPLEMENTATION: Multi-Account Bounty Tracking Fix
+            # Previously, this section would filter out log files that didn't appear to come from "active" EVE clients
+            # This caused bounties from other accounts to be missed. Now we include ALL recent log files.
+            # 
+            # What this fixes:
+            # - Bounties from all EVE accounts are now tracked, not just the "focused" one
+            # - No more log files being excluded due to overly restrictive "active client" detection
+            # - All bounty data is processed regardless of which EVE process it appears to belong to
             recent_files = []
             for log_file in all_log_files:
                 if self.is_recent_file(log_file):
-                    # Only include logs from active EVE clients
-                    if self.is_log_from_active_client(log_file):
-                        recent_files.append(log_file)
-                        print(f"✅ Including log from active client: {log_file.name}")
-                    else:
-                        print(f"⏸️ Skipping log from inactive client: {log_file.name}")
+                    # OPTION 1: Include ALL recent log files regardless of "active client" status
+                    # This ensures bounties from ALL EVE accounts are tracked
+                    recent_files.append(log_file)
+                    print(f"✅ INCLUDING ALL LOGS: {log_file.name} (Option 1: No restrictive filtering)")
             
             if not recent_files:
                 self.status_var.set("No recent log files found")
@@ -1531,7 +1551,12 @@ class EVELogReader:
         self.text_widget.see("1.0")
     
     def check_for_changes(self):
-        """Check if any recent log files have changed using content hashing"""
+        """Check if any recent log files have changed using content hashing
+        
+        OPTION 1 IMPLEMENTATION: This method now monitors ALL recent log files without
+        restrictive filtering based on "active client" status. This ensures bounties
+        from all EVE accounts are tracked, not just the focused one.
+        """
         try:
             changed_files = []
             current_time = self.get_utc_now()
@@ -1542,9 +1567,10 @@ class EVELogReader:
                 for log_file in Path(self.eve_log_dir).glob(pattern):
                     file_path = str(log_file)
                     if os.path.exists(file_path) and self.is_recent_file(file_path):
-                        # Only monitor logs from active EVE clients
-                        if not self.is_log_from_active_client(file_path):
-                            continue
+                        # OPTION 1 IMPLEMENTATION: Monitor ALL recent log files (no restrictive filtering)
+                        # Previously, this would skip logs from "inactive" clients, causing bounties to be missed
+                        # Now we monitor ALL recent log files to ensure bounties from all EVE accounts are tracked
+                        
                         # Get current file stats
                         current_size = os.path.getsize(file_path)
                         current_mtime = os.path.getmtime(file_path)
