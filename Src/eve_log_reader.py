@@ -14,7 +14,7 @@ import logging  # New import for file logging
 import psutil  # For detecting active EVE processes
 
 # Application version
-APP_VERSION = "0.6.7"
+APP_VERSION = "0.6.8"
 
 # Timezone handling: All timestamps are handled in UTC to match EVE Online log format
 # EVE Online logs use UTC timestamps, so we maintain UTC throughout the system
@@ -110,9 +110,10 @@ class EVELogReader:
             return self._active_eve_clients_cache
         
         active_clients = []
+        eve_processes_found = []
         
         try:
-            # Look for EVE Online processes (only basic info to avoid permission issues)
+            # First pass: collect all EVE processes
             for proc in psutil.process_iter(['pid', 'name']):
                 try:
                     proc_info = proc.info
@@ -120,34 +121,45 @@ class EVELogReader:
                     
                     # Check for EVE Online executable names
                     if any(eve_name in proc_name for eve_name in ['eve.exe', 'exefile.exe']):
-                        # Get the process working directory (where logs are stored)
-                        try:
-                            working_dir = proc.cwd()
-                            log_dir = os.path.join(working_dir, 'logs')
-                            
-                            if os.path.exists(log_dir):
-                                active_clients.append({
-                                    'pid': proc_info['pid'],
-                                    'name': proc_info['name'],
-                                    'exe': None,  # Skip exe to avoid permission issues
-                                    'log_dir': log_dir,
-                                    'working_dir': working_dir
-                                })
-                                print(f"🎮 Found active EVE client: PID {proc_info['pid']} - {proc_info['name']}")
-                                print(f"   Log directory: {log_dir}")
-                        except (psutil.AccessDenied, psutil.NoSuchProcess):
-                            # Skip processes we can't access
-                            continue
-                            
+                        eve_processes_found.append(proc_info)
+                        
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
                     
         except Exception as e:
             print(f"⚠️ Error detecting EVE processes: {e}")
         
-        # If no active clients found, also check common EVE installation paths
+        # If we found EVE processes, use them as active clients
+        if eve_processes_found:
+            print(f"🎮 Found {len(eve_processes_found)} EVE processes")
+            
+            # Find the centralized logs directory
+            centralized_logs_dir = None
+            common_paths = [
+                os.path.expanduser("~/Documents/EVE/logs"),
+                os.path.expanduser("~/Documents/EVE Online/logs")
+            ]
+            
+            for path in common_paths:
+                if os.path.exists(path):
+                    centralized_logs_dir = path
+                    print(f"📁 Found centralized EVE logs directory: {centralized_logs_dir}")
+                    break
+            
+            # Create an active client entry for each EVE process
+            for proc_info in eve_processes_found:
+                active_clients.append({
+                    'pid': proc_info['pid'],
+                    'name': f"EVE Client {proc_info['pid']}",
+                    'exe': None,
+                    'log_dir': centralized_logs_dir or "Unknown",
+                    'working_dir': "Centralized Logs"
+                })
+                print(f"🎮 Added active EVE client: PID {proc_info['pid']} - {proc_info['name']}")
+        
+        # If no EVE processes found, fall back to common installation paths
         if not active_clients:
-            print("🔍 No active EVE clients found, checking common installation paths...")
+            print("🔍 No active EVE processes found, checking common installation paths...")
             common_paths = [
                 os.path.expanduser("~/Documents/EVE/logs"),
                 os.path.expanduser("~/Documents/EVE Online/logs"),
