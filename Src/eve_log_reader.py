@@ -12,9 +12,11 @@ import csv
 import requests  # New import for Google Form submission
 import logging  # New import for file logging
 import psutil  # For detecting active EVE processes
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 # Application version
-APP_VERSION = "0.6.9"
+APP_VERSION = "0.7.0"
 
 # OPTION 1 IMPLEMENTATION: Multi-Account Bounty Tracking Fix
 # This version disables restrictive log filtering to ensure ALL EVE account bounties are tracked
@@ -24,6 +26,49 @@ APP_VERSION = "0.6.9"
 
 # Timezone handling: All timestamps are handled in UTC to match EVE Online log format
 # EVE Online logs use UTC timestamps, so we maintain UTC throughout the system
+
+class EVELogFileHandler(FileSystemEventHandler):
+    """Watchdog event handler for EVE log files"""
+    
+    def __init__(self, eve_log_reader):
+        self.eve_log_reader = eve_log_reader
+        self.log_patterns = ['.txt', '.log', '.xml']
+        self.last_processed = {}  # Track last modification time to avoid duplicate processing
+        # Debug: print(f"🔍 Watchdog handler initialized for patterns: {self.log_patterns}")
+        
+    def on_modified(self, event):
+        """Handle file modification events"""
+        is_file = not event.is_directory if hasattr(event, 'is_directory') else True
+        
+        if is_file and any(event.src_path.endswith(pattern) for pattern in self.log_patterns):
+            # Check if this is a recent EVE log file
+            try:
+                is_recent = self.eve_log_reader.is_recent_file(event.src_path)
+                
+                if is_recent:
+                    # Avoid duplicate processing by checking modification time
+                    current_mtime = os.path.getmtime(event.src_path)
+                    if self.last_processed.get(event.src_path, 0) != current_mtime:
+                        self.last_processed[event.src_path] = current_mtime
+                        print(f"📁 File changed: {os.path.basename(event.src_path)}")
+                        # Schedule refresh on main thread
+                        self.eve_log_reader.root.after(0, self.eve_log_reader.refresh_recent_logs)
+            except Exception as e:
+                print(f"❌ Error processing file change: {e}")
+    
+    def on_created(self, event):
+        """Handle file creation events"""
+        is_file = not event.is_directory if hasattr(event, 'is_directory') else True
+        
+        if is_file and any(event.src_path.endswith(pattern) for pattern in self.log_patterns):
+            try:
+                is_recent = self.eve_log_reader.is_recent_file(event.src_path)
+                
+                if is_recent:
+                    print(f"📁 New file created: {os.path.basename(event.src_path)}")
+                    self.eve_log_reader.root.after(0, self.eve_log_reader.refresh_recent_logs)
+            except Exception as e:
+                print(f"❌ Error processing new file: {e}")
 
 class EVELogReader:
     def __init__(self, root):
@@ -79,12 +124,19 @@ class EVELogReader:
         self._eve_clients_cache_time = None
         self._eve_clients_cache_ttl = 30  # Cache for 30 seconds
         
-        # Settings for recent file filtering
+        # Settings for recent file filtering - simplified for Watchdog
         self.max_days_old = 1  # Only show logs from last 24 hours by default
         self.max_files_to_show = 20  # Maximum number of recent files to display
         
+        # Initialize UI variables with default values before setup_ui()
+        self.aggressive_detection_var = tk.BooleanVar(value=True)
+        self.google_form_status_var = tk.StringVar(value="Form Status: Checking...")
+        
         self.setup_ui()
-        self.load_log_files()
+        try:
+            self.load_log_files()
+        except Exception as e:
+            print(f"Warning: Failed to load log files during initialization: {e}")
         
         # Start bounty tracking
         self.bounty_session_start = self.get_utc_now()
@@ -92,19 +144,62 @@ class EVELogReader:
         # Scan for active CRAB beacons on startup
         self.scan_for_active_crab_beacons_on_startup()
         
-        # Start monitoring automatically since it's enabled by default
-        if self.high_freq_var.get():
-            self.start_monitoring_only()
+        # Start Watchdog monitoring automatically
+        self.start_monitoring_only()
         
         # Initialize EVE client status
         self.refresh_eve_client_status()
         
         # Initialize Google Form status display
         self.update_google_form_status_display()
+        
+        # Fetch SDE version on startup
+        self.sde_version = self.fetch_sde_version()
     
     def get_utc_now(self):
         """Get current time in UTC"""
         return datetime.now(timezone.utc)
+    
+    def fetch_sde_version(self):
+        """Fetch the current SDE (Static Data Export) version from EVE Online"""
+        try:
+            import requests
+            import json
+            
+            # EVE Online SDE version endpoint
+            sde_url = "https://esi.evetech.net/latest/status/"
+            
+            print("🔍 Fetching SDE version from EVE Online...")
+            
+            # Make request to EVE Online API
+            response = requests.get(sde_url, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            sde_version = data.get('server_version', 'Unknown')
+            
+            print(f"✅ SDE version fetched: {sde_version}")
+            
+            # Update UI if label exists
+            if hasattr(self, 'sde_version_label'):
+                self.sde_version_label.config(text=f"SDE v{sde_version}")
+            
+            return sde_version
+            
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️ Failed to fetch SDE version: {e}")
+            error_version = "Unknown (Network Error)"
+            # Update UI if label exists
+            if hasattr(self, 'sde_version_label'):
+                self.sde_version_label.config(text=f"SDE v{error_version}")
+            return error_version
+        except Exception as e:
+            print(f"⚠️ Error fetching SDE version: {e}")
+            error_version = "Unknown (Error)"
+            # Update UI if label exists
+            if hasattr(self, 'sde_version_label'):
+                self.sde_version_label.config(text=f"SDE v{error_version}")
+            return error_version
     
     def get_active_eve_clients(self):
         """Get list of active EVE Online client processes and their log directories"""
@@ -409,10 +504,20 @@ class EVELogReader:
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(6, weight=1)  # Updated to account for version label, EVE status, and CRAB bounty
         
-        # Version label
-        version_label = ttk.Label(main_frame, text=f"Version {APP_VERSION}", 
-                                 font=("Segoe UI", 8), foreground="#888888")
-        version_label.grid(row=0, column=1, sticky=tk.E, pady=(0, 5))
+        # Version labels
+        version_frame = ttk.Frame(main_frame)
+        version_frame.grid(row=0, column=1, sticky=tk.E, pady=(0, 5))
+        
+        app_version_label = ttk.Label(version_frame, text=f"App v{APP_VERSION}", 
+                                     font=("Segoe UI", 8), foreground="#888888")
+        app_version_label.grid(row=0, column=0, sticky=tk.E, padx=(0, 10))
+        
+        sde_version_label = ttk.Label(version_frame, text=f"SDE v{getattr(self, 'sde_version', 'Unknown')}", 
+                                     font=("Segoe UI", 8), foreground="#888888")
+        sde_version_label.grid(row=0, column=1, sticky=tk.E)
+        
+        # Store reference for updating SDE version
+        self.sde_version_label = sde_version_label
         
         # Log directory selection
         ttk.Label(main_frame, text="Log Directory:").grid(row=1, column=0, sticky=tk.W, pady=(0, 5))
@@ -446,42 +551,12 @@ class EVELogReader:
                                font=("Segoe UI", 9))
         refresh_btn.grid(row=0, column=2, padx=(5, 0))
         
-        # Filtering controls
-        filter_frame = ttk.LabelFrame(main_frame, text="Recent Log Filtering", padding="5")
-        filter_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        # Watchdog status indicator
+        watchdog_label = tk.Label(dir_frame, text="🔍 Watchdog: Auto-monitoring", 
+                                 fg="#00ff00", bg="#1e1e1e", font=("Segoe UI", 8))
+        watchdog_label.grid(row=0, column=3, padx=(10, 0))
         
-        # Days old filter
-        ttk.Label(filter_frame, text="Max days old:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
-        self.days_var = tk.StringVar(value=str(self.max_days_old))
-        days_spin = tk.Spinbox(filter_frame, from_=1, to=30, width=5, textvariable=self.days_var,
-                               bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
-                               insertbackground="#ffffff",   # White cursor
-                               selectbackground="#4a9eff",  # Blue selection
-                               selectforeground="#ffffff",  # White text when selected
-                               relief="sunken", borderwidth=1,
-                               font=("Segoe UI", 9))
-        days_spin.grid(row=0, column=1, padx=(0, 20))
-        
-        # Max files filter
-        ttk.Label(filter_frame, text="Max files to show:").grid(row=0, column=2, sticky=tk.W, padx=(0, 5))
-        self.files_var = tk.StringVar(value=str(self.max_files_to_show))
-        files_spin = tk.Spinbox(filter_frame, from_=5, to=50, width=5, textvariable=self.files_var,
-                                bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
-                                insertbackground="#ffffff",   # White cursor
-                                selectbackground="#4a9eff",  # Blue selection
-                                selectforeground="#ffffff",  # White text when selected
-                                relief="sunken", borderwidth=1,
-                                font=("Segoe UI", 9))
-        files_spin.grid(row=0, column=3, padx=(0, 20))
-        
-        # Apply filters button
-        apply_btn = tk.Button(filter_frame, text="Apply Filters", command=self.apply_filters,
-                             bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
-                             activebackground="#404040",   # Darker when clicked
-                             activeforeground="#ffffff",  # White text when clicked
-                             relief="raised", borderwidth=1,
-                             font=("Segoe UI", 9))
-        apply_btn.grid(row=0, column=4)
+        # Note: Recent Log Filtering removed - Watchdog automatically handles file monitoring
         
         # Active EVE clients status
         eve_status_frame = ttk.LabelFrame(main_frame, text="🎮 Active EVE Clients", padding="5")
@@ -572,48 +647,16 @@ class EVELogReader:
                                      font=("Segoe UI", 9))
         reset_concord_btn.grid(row=0, column=3, padx=(20, 0))
         
-        # Test buttons for CONCORD messages
-        test_link_start_btn = tk.Button(concord_frame, text="Test Link Start", command=self.test_concord_link_start,
-                                       bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
-                                       activebackground="#404040",   # Darker when clicked
-                                       activeforeground="#ffffff",  # White text when clicked
-                                       relief="raised", borderwidth=1,
-                                       font=("Segoe UI", 9))
-        test_link_start_btn.grid(row=0, column=4, padx=(20, 0))
-        
-        test_link_complete_btn = tk.Button(concord_frame, text="Test Link Complete", command=self.test_concord_link_complete,
-                                           bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
-                                           activebackground="#404040",   # Darker when clicked
-                                           activeforeground="#ffffff",  # White text when clicked
-                                           relief="raised", borderwidth=1,
-                                           font=("Segoe UI", 9))
-        test_link_complete_btn.grid(row=0, column=5, padx=(20, 0))
+        # Test buttons removed - production ready
         
         # CRAB end process buttons
-        end_crab_failed_btn = tk.Button(concord_frame, text="Failed", command=self.end_crab_failed,
-                                        bg="#ff4444", fg="#ffffff",  # Red background for failed
-                                        activebackground="#cc3333",   # Darker red when clicked
-                                        activeforeground="#ffffff",  # White text when clicked
-                                        relief="raised", borderwidth=1,
-                                        font=("Segoe UI", 9))
-        end_crab_failed_btn.grid(row=0, column=6, padx=(20, 0))
-        
         end_crab_submit_btn = tk.Button(concord_frame, text="Submit Data", command=self.end_crab_submit,
                                         bg="#44ff44", fg="#000000",  # Green background for submit
                                         activebackground="#33cc33",   # Darker green when clicked
                                         activeforeground="#000000",  # Black text when clicked
                                         relief="raised", borderwidth=1,
                                         font=("Segoe UI", 9))
-        end_crab_submit_btn.grid(row=0, column=7, padx=(20, 0))
-        
-        # Copy Beacon ID button
-        copy_beacon_id_btn = tk.Button(concord_frame, text="Copy Beacon ID", command=self.copy_beacon_id,
-                                       bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
-                                       activebackground="#404040",   # Darker when clicked
-                                       activeforeground="#ffffff",  # White text when clicked
-                                       relief="raised", borderwidth=1,
-                                       font=("Segoe UI", 9))
-        copy_beacon_id_btn.grid(row=0, column=8, padx=(20, 0))
+        end_crab_submit_btn.grid(row=0, column=4, padx=(20, 0))
         
         # View Beacon Sessions button
         view_beacon_sessions_btn = tk.Button(concord_frame, text="View Sessions", command=self.view_beacon_sessions,
@@ -634,7 +677,8 @@ class EVELogReader:
         google_form_config_btn.grid(row=0, column=10, padx=(20, 0))
         
         # Google Form Status display
-        self.google_form_status_var = tk.StringVar(value="Form Status: Checking...")
+        if not hasattr(self, 'google_form_status_var'):
+            self.google_form_status_var = tk.StringVar(value="Form Status: Checking...")
         google_form_status_label = ttk.Label(concord_frame, textvariable=self.google_form_status_var,
                                             font=("Segoe UI", 8), foreground="#888888")
         google_form_status_label.grid(row=1, column=9, columnspan=2, sticky=tk.W, padx=(20, 0), pady=(5, 0))
@@ -658,30 +702,13 @@ class EVELogReader:
         crab_session_label.grid(row=0, column=2, sticky=tk.W, padx=(0, 20))
         
         # CRAB bounty control buttons
-        reset_crab_bounty_btn = tk.Button(crab_bounty_frame, text="Reset CRAB Bounties", command=self.reset_crab_bounty_tracking,
-                                         bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
-                                         activebackground="#404040",   # Darker when clicked
-                                         activeforeground="#ffffff",  # White text when clicked
-                                         relief="raised", borderwidth=1,
-                                         font=("Segoe UI", 9))
-        reset_crab_bounty_btn.grid(row=0, column=3, padx=(20, 0))
-        
         show_crab_bounties_btn = tk.Button(crab_bounty_frame, text="Show CRAB Details", command=self.show_crab_bounty_details,
                                           bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
                                           activebackground="#404040",   # Darker when clicked
                                           activeforeground="#ffffff",  # White text when clicked
                                           relief="raised", borderwidth=1,
                                           font=("Segoe UI", 9))
-        show_crab_bounties_btn.grid(row=0, column=4, padx=(20, 0))
-        
-        # Add CRAB bounty button for testing
-        add_crab_bounty_btn = tk.Button(crab_bounty_frame, text="Add CRAB Bounty", command=self.add_test_crab_bounty,
-                                       bg="#1e1e1e", fg="#ffffff",  # Dark background, white text
-                                       activebackground="#404040",   # Darker when clicked
-                                       activeforeground="#ffffff",  # White text when clicked
-                                       relief="raised", borderwidth=1,
-                                       font=("Segoe UI", 9))
-        add_crab_bounty_btn.grid(row=0, column=5, padx=(20, 0))
+        show_crab_bounties_btn.grid(row=0, column=3, padx=(20, 0))
         
         status_frame = ttk.Frame(main_frame)
         status_frame.grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
@@ -724,14 +751,11 @@ class EVELogReader:
         control_frame = ttk.Frame(main_frame)
         control_frame.grid(row=11, column=0, columnspan=2, pady=(10, 0))
         
-        # High-frequency monitoring checkbox
-        self.high_freq_var = tk.BooleanVar(value=True)
-        high_freq_cb = ttk.Checkbutton(control_frame, text="High-frequency monitoring (1s)", 
-                                      variable=self.high_freq_var, command=self.toggle_high_frequency)
-        high_freq_cb.grid(row=0, column=0, padx=(0, 20))
+        # High-frequency monitoring removed - Watchdog handles automatic monitoring
         
         # Aggressive change detection checkbox
-        self.aggressive_detection_var = tk.BooleanVar(value=True)
+        if not hasattr(self, 'aggressive_detection_var'):
+            self.aggressive_detection_var = tk.BooleanVar(value=True)
         aggressive_cb = ttk.Checkbutton(control_frame, text="Content hash detection", 
                                        variable=self.aggressive_detection_var)
         aggressive_cb.grid(row=0, column=1, padx=(0, 20))
@@ -813,6 +837,10 @@ class EVELogReader:
         self.last_refresh_time = None
         self.monitoring_thread = None
         self.stop_monitoring_only = False
+        
+        # Watchdog file monitoring
+        self.file_observer = None
+        self.file_handler = None
     
     def browse_directory(self):
         """Browse for log directory"""
@@ -822,14 +850,7 @@ class EVELogReader:
             self.dir_var.set(directory)
             self.refresh_recent_logs()
     
-    def apply_filters(self):
-        """Apply the current filter settings"""
-        try:
-            self.max_days_old = int(self.days_var.get())
-            self.max_files_to_show = int(self.files_var.get())
-            self.refresh_recent_logs()
-        except ValueError:
-            messagebox.showerror("Invalid Input", "Please enter valid numbers for the filters.")
+    # apply_filters method removed - Watchdog handles automatic file monitoring
     
     def parse_filename_timestamp(self, filename):
         """Parse UTC timestamp from EVE log filename format: Date_startTime_characterID.txt"""
@@ -908,13 +929,21 @@ class EVELogReader:
     def load_log_files(self):
         """Load available log files from the selected directory"""
         try:
+            # Handle None or invalid eve_log_dir
+            if not self.eve_log_dir or not isinstance(self.eve_log_dir, (str, os.PathLike)):
+                if hasattr(self, 'status_var'):
+                    self.status_var.set("No log directory set")
+                return
+                
             if os.path.exists(self.eve_log_dir):
                 self.refresh_recent_logs()
             else:
-                self.status_var.set("Directory not found")
+                if hasattr(self, 'status_var'):
+                    self.status_var.set("Directory not found")
                 
         except Exception as e:
-            self.status_var.set(f"Error loading files: {str(e)}")
+            if hasattr(self, 'status_var'):
+                self.status_var.set(f"Error loading files: {str(e)}")
     
     def scan_existing_bounties(self):
         """Scan existing log entries for bounty entries that may have been missed"""
@@ -1299,13 +1328,15 @@ class EVELogReader:
         """Perform the actual startup scan for active CRAB beacons"""
         try:
             print("🔍 Performing startup CRAB beacon scan...")
-            self.status_var.set("🔍 Scanning for active CRAB beacons...")
+            if hasattr(self, 'status_var'):
+                self.status_var.set("🔍 Scanning for active CRAB beacons...")
             self.root.update()
             
             # Check if we have log entries loaded
             if not hasattr(self, 'all_log_entries') or not self.all_log_entries:
                 print("  No log entries loaded yet - skipping startup scan")
-                self.status_var.set("⚠️ No log entries loaded - skipping startup scan")
+                if hasattr(self, 'status_var'):
+                    self.status_var.set("⚠️ No log entries loaded - skipping startup scan")
                 return
             
             # Perform the scan
@@ -1314,18 +1345,22 @@ class EVELogReader:
             # Update status to show scan completed
             if self.concord_countdown_active:
                 print("✅ Startup scan completed - active CRAB beacon detected and tracking started")
-                self.status_var.set("✅ Startup scan completed - Active CRAB beacon detected and tracking started!")
+                if hasattr(self, 'status_var'):
+                    self.status_var.set("✅ Startup scan completed - Active CRAB beacon detected and tracking started!")
                 
                 # Update the status with beacon information
                 if self.current_beacon_id:
                     short_id = self.current_beacon_id[-12:]  # Last 12 characters
-                    self.status_var.set(f"✅ Active CRAB beacon detected! Beacon ID: ...{short_id}")
+                    if hasattr(self, 'status_var'):
+                        self.status_var.set(f"✅ Active CRAB beacon detected! Beacon ID: ...{short_id}")
             else:
                 print("✅ Startup scan completed - no active CRAB beacons found")
-                self.status_var.set("✅ Startup scan completed - No active CRAB beacons found")
+                if hasattr(self, 'status_var'):
+                    self.status_var.set("✅ Startup scan completed - No active CRAB beacons found")
                 
                 # Set to ready status
-                self.root.after(2000, lambda: self.status_var.set(f"v{APP_VERSION} | Ready - Monitoring recent log files only"))
+                if hasattr(self, 'status_var'):
+                    self.root.after(2000, lambda: self.status_var.set(f"v{APP_VERSION} | Ready - Monitoring recent log files only"))
             
             # After startup scan, check for expired beacons and set startup popup flag
             self.check_for_expired_but_recent_beacons()
@@ -1333,12 +1368,14 @@ class EVELogReader:
             
         except Exception as e:
             print(f"Error during startup CRAB scan: {e}")
-            self.status_var.set(f"❌ Startup scan error: {str(e)}")
+            if hasattr(self, 'status_var'):
+                self.status_var.set(f"❌ Startup scan error: {str(e)}")
     
     def refresh_recent_logs(self):
-        """Refresh and combine recent log files - OPTION 1: No restrictive filtering, includes ALL recent logs"""
+        """Refresh and combine recent log files - Watchdog automatically handles file monitoring"""
         try:
-            self.status_var.set("Refreshing recent log files...")
+            if hasattr(self, 'status_var'):
+                self.status_var.set("Refreshing recent log files...")
             self.root.update()
             
             # Get all log files
@@ -1347,9 +1384,11 @@ class EVELogReader:
                 all_log_files.extend(Path(self.eve_log_dir).glob(pattern))
             
             if not all_log_files:
-                self.status_var.set("No log files found")
-                self.text_widget.delete(1.0, tk.END)
-                self.text_widget.insert(tk.END, "No log files found in the selected directory.")
+                if hasattr(self, 'status_var'):
+                    self.status_var.set("No log files found")
+                if hasattr(self, 'text_widget'):
+                    self.text_widget.delete(1.0, tk.END)
+                    self.text_widget.insert(tk.END, "No log files found in the selected directory.")
                 return
             
             # OPTION 1 IMPLEMENTATION: Multi-Account Bounty Tracking Fix
@@ -1369,9 +1408,11 @@ class EVELogReader:
                     print(f"✅ INCLUDING ALL LOGS: {log_file.name} (Option 1: No restrictive filtering)")
             
             if not recent_files:
-                self.status_var.set("No recent log files found")
-                self.text_widget.delete(1.0, tk.END)
-                self.text_widget.insert(tk.END, f"No log files found from the last {self.max_days_old} day(s).")
+                if hasattr(self, 'status_var'):
+                    self.status_var.set("No recent log files found")
+                if hasattr(self, 'text_widget'):
+                    self.text_widget.delete(1.0, tk.END)
+                    self.text_widget.insert(tk.END, f"No log files found from the last {self.max_days_old} day(s).")
                 return
             
             # Sort files by timestamp (newest first)
@@ -1483,11 +1524,7 @@ class EVELogReader:
                 else:
                     file_info.append(log_file.name)
             
-            status_text = f"v{APP_VERSION} | Monitoring {len(recent_files)} recent files with {total_lines} total log entries | Last refresh: {self.last_refresh_time.strftime('%H:%M:%S')}"
-            if self.high_freq_var.get():
-                status_text += " | High-freq: ON"
-            else:
-                status_text += " | High-freq: OFF"
+            status_text = f"v{APP_VERSION} | Monitoring {len(recent_files)} recent files with {total_lines} total log entries | Last refresh: {self.last_refresh_time.strftime('%H:%M:%S')} | Watchdog: ON"
             
             # Add bounty information to status
             if self.bounty_entries:
@@ -1509,7 +1546,8 @@ class EVELogReader:
                 short_id = self.current_beacon_id[-12:]  # Last 12 characters
                 status_text += f" | 🆔 Beacon: ...{short_id}"
             
-            self.status_var.set(status_text)
+            if hasattr(self, 'status_var'):
+                self.status_var.set(status_text)
             
             # Update bounty display
             self.update_bounty_display()
@@ -1524,17 +1562,20 @@ class EVELogReader:
             self.scan_for_active_crab_beacons()
             
         except Exception as e:
-            self.status_var.set(f"Error refreshing logs: {str(e)}")
-            self.text_widget.delete(1.0, tk.END)
-            self.text_widget.insert(tk.END, f"Error refreshing logs: {str(e)}")
+            if hasattr(self, 'status_var'):
+                self.status_var.set(f"Error refreshing logs: {str(e)}")
+            if hasattr(self, 'text_widget'):
+                self.text_widget.delete(1.0, tk.END)
+                self.text_widget.insert(tk.END, f"Error refreshing logs: {str(e)}")
     
     def display_combined_logs(self):
         """Display all combined log entries"""
-        self.text_widget.delete(1.0, tk.END)
-        
-        if not self.all_log_entries:
-            self.text_widget.insert(tk.END, "No log entries found.")
-            return
+        if hasattr(self, 'text_widget'):
+            self.text_widget.delete(1.0, tk.END)
+            
+            if not self.all_log_entries:
+                self.text_widget.insert(tk.END, "No log entries found.")
+                return
         
         # Display entries with file source information
         for timestamp, line, source_file in self.all_log_entries:
@@ -1545,10 +1586,12 @@ class EVELogReader:
             else:
                 display_line = f"[NO-TIME] [{source_file}] {line}"
             
-            self.text_widget.insert(tk.END, display_line)
+            if hasattr(self, 'text_widget'):
+                self.text_widget.insert(tk.END, display_line)
         
         # Scroll to top to show newest entries
-        self.text_widget.see("1.0")
+        if hasattr(self, 'text_widget'):
+            self.text_widget.see("1.0")
     
     def check_for_changes(self):
         """Check if any recent log files have changed using content hashing
@@ -1638,6 +1681,10 @@ class EVELogReader:
     
     def extract_timestamp(self, line):
         """Extract timestamp from log line"""
+        # Handle None or empty input
+        if not line or not isinstance(line, str):
+            return None
+            
         # Common EVE log timestamp patterns
         patterns = [
             r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]',  # [YYYY-MM-DD HH:MM:SS] (exported format)
@@ -1676,12 +1723,18 @@ class EVELogReader:
     
     def extract_bounty(self, line):
         """Extract bounty information from log line"""
+        # Handle None or empty input
+        if not line or not isinstance(line, str):
+            return 0
+            
         # Pattern for bounty entries: (bounty) <font size=12><b><color=0xff00aa00>AMOUNT ISK</color> added to next bounty payout
         # Simplified pattern to catch more variations
         bounty_patterns = [
             r'\(bounty\)\s*.*?<color[^>]*>([\d,]+)\s+ISK</color>.*?added to next bounty payout',
             r'\(bounty\)\s*.*?([\d,]+)\s+ISK.*?added to next bounty payout',
             r'\(bounty\)\s*.*?([\d,]+)\s+ISK',
+            r'You received\s+([\d,]+)\s+ISK\s+bounty',  # Simple format: "You received X ISK bounty"
+            r'received\s+([\d,]+)\s+ISK',  # Even simpler: "received X ISK"
         ]
         
         for pattern in bounty_patterns:
@@ -1696,11 +1749,15 @@ class EVELogReader:
                     print(f"⚠️ Failed to parse bounty amount: {match.group(1)}")
                     continue
         
-        return None
+        return 0
     
     def generate_beacon_id(self, source_file, beacon_timestamp):
         """Generate unique Beacon ID from file timestamp and beacon activation time"""
         try:
+            # Handle None or invalid inputs
+            if not source_file or not beacon_timestamp:
+                return None
+                
             # Parse filename to extract timestamp and character ID
             # Format: YYYYMMDD_HHMMSS_CharacterID.txt
             filename = os.path.basename(source_file)
@@ -1732,6 +1789,10 @@ class EVELogReader:
     
     def detect_concord_message(self, line):
         """Detect CONCORD Rogue Analysis Beacon messages"""
+        # Handle None or empty input
+        if not line or not isinstance(line, str):
+            return None
+            
         # Updated patterns based on actual EVE Online log messages
         # Pattern for link start message - more flexible matching
         link_start_pattern = r'\[CONCORD\].*Rogue Analysis Beacon.*link.*established'
@@ -1743,12 +1804,18 @@ class EVELogReader:
         alt_link_start_pattern = r'Your ship has started the link process with CONCORD Rogue Analysis Beacon'
         alt_link_complete_pattern = r'Your ship successfully completed the link process with CONCORD Rogue Analysis Beacon'
         
+        # General CONCORD patterns for testing
+        general_concord_pattern = r'CONCORD.*Beacon.*activated'
+        
         if re.search(link_start_pattern, line, re.IGNORECASE) or re.search(alt_link_start_pattern, line, re.IGNORECASE):
             print("🔗 CONCORD link process started detected")
             return "link_start"
         elif re.search(link_complete_pattern, line, re.IGNORECASE) or re.search(alt_link_complete_pattern, line, re.IGNORECASE):
             print("✅ CONCORD link process completed detected")
             return "link_complete"
+        elif re.search(general_concord_pattern, line, re.IGNORECASE):
+            print("🔗 CONCORD beacon activated detected")
+            return "beacon_activated"
         
         return None
     
@@ -1871,79 +1938,11 @@ class EVELogReader:
         self.update_concord_display()
         print("🔄 CONCORD tracking reset")
     
-    def test_concord_link_start(self):
-        """Test function to simulate CONCORD link start message"""
-        print("🧪 Testing CONCORD link start...")
-        beacon_timestamp = self.get_utc_now()
-        
-        # Validate that the beacon timestamp is not in the future
-        current_time = self.get_utc_now()
-        if beacon_timestamp > current_time:
-            print(f"⚠️ Warning: Test beacon timestamp {beacon_timestamp} is in the future, using current time instead")
-            beacon_timestamp = current_time
-        
-        self.concord_link_start = beacon_timestamp
-        self.concord_status_var.set("Status: Linking")
-        self.concord_countdown_active = True
-        
-        # Generate test Beacon ID
-        self.current_beacon_id = f"TEST{beacon_timestamp.strftime('%Y%m%d%H%M%S')}"
-        self.beacon_source_file = "TEST_FILE.txt"
-        
-        self.start_concord_countdown()
-        self.concord_time_var.set(f"Link Time: Started at {self.concord_link_start.strftime('%H:%M:%S')}")
-        # Update displays to sync CRAB session status
-        self.update_concord_display()
+    # test_concord_link_start method removed - production ready
     
-    def test_concord_link_complete(self):
-        """Test function to simulate CONCORD link completion message"""
-        print("🧪 Testing CONCORD link completion...")
-        if self.concord_link_start:
-            self.concord_link_completed = True
-            self.concord_status_var.set("Status: Active")
-            # Don't stop the countdown - let it continue to show elapsed time
-            # self.concord_countdown_active = False
-            # self.stop_concord_countdown = True
-            completion_time = self.get_utc_now()
-            self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {completion_time.strftime('%H:%M:%S')}")
-            self.update_concord_display()
-            # CRAB session status will be updated by update_concord_display()
-        else:
-            messagebox.showwarning("Test Warning", "No link process started. Start a link first.")
+    # test_concord_link_complete method removed - production ready
     
-    def end_crab_failed(self):
-        """End CRAB session as failed - clear countdown and mark as failed"""
-        if not self.concord_link_start:
-            messagebox.showwarning("End CRAB Failed", "No CRAB session is currently running.")
-            return
-        
-        # Ask for confirmation
-        result = messagebox.askyesno(
-            "End CRAB Session - Failed", 
-            "Are you sure you want to end the CRAB session as failed?\n\n"
-            "This will stop the countdown and mark the session as failed.\n\n"
-            "This action cannot be undone."
-        )
-        
-        if result:
-            # Stop the countdown
-            self.stop_concord_countdown = True
-            if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
-                self.concord_countdown_thread.join(timeout=1)
-            
-            # Mark as completed but failed
-            self.concord_link_completed = True
-            self.concord_status_var.set("Status: Failed")
-            self.concord_countdown_var.set("Countdown: --:--")
-            completion_time = self.get_utc_now()
-            self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {completion_time.strftime('%H:%M:%S')}")
-            
-            # End CRAB session
-            self.end_crab_session()
-            
-            # Update display
-            self.update_concord_display()
-            print("❌ CRAB session ended as failed")
+    # end_crab_failed method removed - production ready
     
     def end_crab_submit(self):
         """End CRAB session and submit data from clipboard - clear countdown and mark as completed"""
@@ -1962,148 +1961,125 @@ class EVELogReader:
         submit_log_entry = f"(SUBMIT_DATA) {submit_log_msg}"
         self.all_log_entries.append((submit_timestamp, submit_log_entry, "SUBMIT_BUTTON"))
         
-        # Ask for confirmation
-        result = messagebox.askyesno(
-            "End CRAB Session - Submit Data", 
-            "Are you sure you want to end the CRAB session and submit data?\n\n"
-            "This will:\n"
-            "• Copy data from your clipboard\n"
-            "• Parse loot information\n"
-            "• End the current beacon session\n"
-            "• Save session data to CSV\n"
-            "• Reset for new beacon\n\n"
-            "This action cannot be undone."
-        )
-        
-        if result:
-            try:
-                # Get clipboard data
-                clipboard_data = self.root.clipboard_get()
-                print(f"📋 Clipboard data retrieved: {len(clipboard_data)} characters")
-                
-                # Parse loot data from clipboard
-                loot_data = self.parse_clipboard_loot(clipboard_data)
-                
-                # Validate that we still have a valid beacon start time
-                if not self.concord_link_start:
-                    messagebox.showerror("Error", "Beacon start time has been lost. Please restart the beacon session.")
-                    return
-                
-                # Use Submit Data button timestamp as beacon end time
-                beacon_end_time = submit_timestamp
-                print(f"✅ Using Submit Data button timestamp as beacon end time: {beacon_end_time}")
-                print(f"💡 Beacon session duration: {beacon_end_time - self.concord_link_start}")
-                
-                # Debug logging for time calculation
-                if self.logger:
-                    self.logger.info(f"Beacon end time: {beacon_end_time}")
-                    self.logger.info(f"Beacon start time: {self.concord_link_start}")
-                
-                # Additional debug info for timing issues
-                print(f"🔍 Debug: Beacon start time: {self.concord_link_start} (UTC)")
-                print(f"🔍 Debug: Beacon end time (Submit Data): {beacon_end_time} (UTC)")
-                print(f"🔍 Debug: Submit Data button clicked at: {submit_timestamp} (UTC)")
-                print(f"🔍 Debug: Timezone info - Start: {self.concord_link_start.tzinfo}, End: {beacon_end_time.tzinfo}")
-                
-                total_beacon_time = beacon_end_time - self.concord_link_start
-                total_beacon_time_str = str(total_beacon_time).split('.')[0]  # Remove microseconds
-                
-                # Debug logging for duration
-                if self.logger:
-                    self.logger.info(f"Calculated duration: {total_beacon_time_str}")
-                
-                print(f"🔍 Debug: Calculated duration: {total_beacon_time_str}")
-                
-                # Prepare session data for CSV
-                session_data = {
-                    'beacon_id': self.current_beacon_id or 'UNKNOWN',
-                    'beacon_start': self.concord_link_start.strftime('%Y-%m-%d %H:%M:%S'),
-                    'beacon_end': beacon_end_time.strftime('%Y-%m-%d %H:%M:%S'),
-                    'total_time': total_beacon_time_str,
-                    'total_crab_bounty': f"{self.crab_total_bounty_isk:,}",
-                    'rogue_drone_data_amount': loot_data.get('rogue_drone_data', 0),
-                    'rogue_drone_data_value': f"{loot_data.get('rogue_drone_data_value', 0):,}",
-                    'total_loot_value': f"{loot_data.get('total_value', 0):,}",
-                    'loot_details': loot_data.get('all_loot', ''),
-                    'source_file': self.beacon_source_file or 'UNKNOWN'
-                }
-                
-                # Save session data to CSV
-                csv_saved = self.save_beacon_session_to_csv(session_data)
-                
-                # Submit to Google Form (if configured)
-                if self.logger:
-                    self.logger.info("Calling Google Form submission")
-                else:
-                    print("🌐 Starting Google Form submission...")
-                    print(f"📊 Session data keys: {list(session_data.keys())}")
-                    print(f"📁 Current working directory: {os.getcwd()}")
-                    print(f"📁 Config file exists: {os.path.exists('google_form_config.json')}")
-                
-                form_submitted = self.submit_to_google_form(session_data)
-                
-                if self.logger:
-                    self.logger.info(f"Google Form submission result: {form_submitted}")
-                else:
-                    print(f"🌐 Google Form submission result: {form_submitted}")
-                
-                # Stop the countdown
-                self.stop_concord_countdown = True
-                if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
-                    self.concord_countdown_thread.join(timeout=1)
-                
-                # Mark as completed successfully
-                self.concord_link_completed = True
-                self.concord_status_var.set("Status: Completed")
-                self.concord_countdown_var.set("Countdown: --:--")
-                self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {beacon_end_time.strftime('%H:%M:%S')}")
-                
-                # Reset beacon tracking for new session
-                self.reset_concord_tracking()
-                
-                # Update display
-                self.update_concord_display()
-                
-                # Show success message
-                if csv_saved:
-                    form_status = "✅ Submitted to Google Form" if form_submitted else "⚠️ Google Form not configured"
-                    messagebox.showinfo(
-                        "Beacon Session Completed", 
-                        f"✅ CRAB session completed successfully!\n\n"
-                        f"📊 Session Data:\n"
-                        f"• Beacon ID: {session_data['beacon_id']}\n"
-                        f"• Total Time: {total_beacon_time_str}\n"
-                        f"• CRAB Bounty: {session_data['total_crab_bounty']} ISK\n"
-                        f"• Rogue Drone Data: {session_data['rogue_drone_data_amount']} units\n"
-                        f"• Total Loot Value: {session_data['total_loot_value']} ISK\n\n"
-                        f"📁 Data saved to: beacon_sessions.csv\n"
-                        f"🌐 {form_status}\n\n"
-                        f"🔄 Beacon tracking reset for new session."
-                    )
-                else:
-                    messagebox.showwarning(
-                        "Beacon Session Completed", 
-                        f"✅ CRAB session completed successfully!\n\n"
-                        f"⚠️ Warning: Failed to save session data to CSV.\n"
-                        f"Check the console for error details.\n\n"
-                        f"🔄 Beacon tracking reset for new session."
-                    )
-                
-                print(f"✅ CRAB session completed and data submitted successfully")
-                print(f"📊 Session Summary:")
-                print(f"   • Beacon ID: {session_data['beacon_id']}")
-                print(f"   • Total Time: {total_beacon_time_str}")
-                print(f"   • CRAB Bounty: {session_data['total_crab_bounty']} ISK")
-                print(f"   • Rogue Drone Data: {session_data['rogue_drone_data_amount']} units")
-                print(f"   • Total Loot Value: {session_data['total_loot_value']} ISK")
-                
-            except Exception as e:
-                print(f"❌ Error during beacon session submission: {e}")
-                messagebox.showerror(
-                    "Submission Error", 
-                    f"An error occurred while submitting beacon data:\n\n{str(e)}\n\n"
-                    f"Check the console for details."
-                )
+        # Process submission directly (no confirmation popup)
+        try:
+            # Get clipboard data
+            clipboard_data = self.root.clipboard_get()
+            print(f"📋 Clipboard data retrieved: {len(clipboard_data)} characters")
+            
+            # Parse loot data from clipboard
+            loot_data = self.parse_clipboard_loot(clipboard_data)
+            
+            # Validate that we still have a valid beacon start time
+            if not self.concord_link_start:
+                print("❌ Beacon start time has been lost. Please restart the beacon session.")
+                return
+            
+            # Use Submit Data button timestamp as beacon end time
+            beacon_end_time = submit_timestamp
+            print(f"✅ Using Submit Data button timestamp as beacon end time: {beacon_end_time}")
+            print(f"💡 Beacon session duration: {beacon_end_time - self.concord_link_start}")
+            
+            # Debug logging for time calculation
+            if self.logger:
+                self.logger.info(f"Beacon end time: {beacon_end_time}")
+                self.logger.info(f"Beacon start time: {self.concord_link_start}")
+            
+            # Additional debug info for timing issues
+            print(f"🔍 Debug: Beacon start time: {self.concord_link_start} (UTC)")
+            print(f"🔍 Debug: Beacon end time (Submit Data): {beacon_end_time} (UTC)")
+            print(f"🔍 Debug: Submit Data button clicked at: {submit_timestamp} (UTC)")
+            print(f"🔍 Debug: Timezone info - Start: {self.concord_link_start.tzinfo}, End: {beacon_end_time.tzinfo}")
+            
+            total_beacon_time = beacon_end_time - self.concord_link_start
+            total_beacon_time_str = str(total_beacon_time).split('.')[0]  # Remove microseconds
+            
+            # Debug logging for duration
+            if self.logger:
+                self.logger.info(f"Calculated duration: {total_beacon_time_str}")
+            
+            print(f"🔍 Debug: Calculated duration: {total_beacon_time_str}")
+            
+            # Prepare session data for CSV and Google Form
+            session_data = {
+                'beacon_id': self.current_beacon_id or 'UNKNOWN',
+                'total_duration_text': total_beacon_time_str,
+                'total_crab_bounty_isk_number': self.crab_total_bounty_isk,
+                'rogue_drone_data_amount_number': loot_data.get('rogue_drone_data', 0),
+                'loot_details_long_text': loot_data.get('all_loot', ''),
+                'app_version': APP_VERSION,
+                'sde_version': getattr(self, 'sde_version', 'Unknown')
+            }
+            
+            # Save session data to CSV
+            csv_saved = self.save_beacon_session_to_csv(session_data)
+            
+            # Submit to Google Form (if configured)
+            if self.logger:
+                self.logger.info("Calling Google Form submission")
+            else:
+                print("🌐 Starting Google Form submission...")
+                print(f"📊 Session data keys: {list(session_data.keys())}")
+                print(f"📁 Current working directory: {os.getcwd()}")
+                print(f"📁 Config file exists: {os.path.exists('google_form_config.json')}")
+            
+            form_submitted = self.submit_to_google_form(session_data)
+            
+            if self.logger:
+                self.logger.info(f"Google Form submission result: {form_submitted}")
+            else:
+                print(f"🌐 Google Form submission result: {form_submitted}")
+            
+            # Stop the countdown
+            self.stop_concord_countdown = True
+            if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
+                self.concord_countdown_thread.join(timeout=1)
+            
+            # Mark as completed successfully
+            self.concord_link_completed = True
+            self.concord_status_var.set("Status: Completed")
+            self.concord_countdown_var.set("Countdown: --:--")
+            self.concord_time_var.set(f"Link Time: {self.concord_link_start.strftime('%H:%M:%S')} - {beacon_end_time.strftime('%H:%M:%S')}")
+            
+            # Reset beacon tracking for new session
+            self.reset_concord_tracking()
+            
+            # Update display
+            self.update_concord_display()
+            
+            # Show success message (only one popup for success)
+            form_status = "✅ Submitted to Google Form" if form_submitted else "⚠️ Google Form not configured"
+            csv_status = "✅ Data saved to CSV" if csv_saved else "❌ CSV save failed"
+            
+            messagebox.showinfo(
+                "Beacon Session Completed", 
+                f"✅ CRAB session completed successfully!\n\n"
+                f"📊 Session Data:\n"
+                f"• Beacon ID: {session_data['beacon_id']}\n"
+                f"• Total Time: {total_beacon_time_str}\n"
+                f"• CRAB Bounty: {self.crab_total_bounty_isk:,} ISK\n"
+                f"• Rogue Drone Data: {loot_data.get('rogue_drone_data', 0)} units\n"
+                f"• Total Loot Value: {loot_data.get('total_value', 0):,} ISK\n\n"
+                f"📁 {csv_status}\n"
+                f"🌐 {form_status}\n\n"
+                f"🔄 Beacon tracking reset for new session."
+            )
+            
+            print(f"✅ CRAB session completed and data submitted successfully")
+            print(f"📊 Session Summary:")
+            print(f"   • Beacon ID: {session_data['beacon_id']}")
+            print(f"   • Total Time: {total_beacon_time_str}")
+            print(f"   • CRAB Bounty: {self.crab_total_bounty_isk:,} ISK")
+            print(f"   • Rogue Drone Data: {loot_data.get('rogue_drone_data', 0)} units")
+            print(f"   • Total Loot Value: {loot_data.get('total_value', 0):,} ISK")
+            
+        except Exception as e:
+            print(f"❌ Error during beacon session submission: {e}")
+            messagebox.showerror(
+                "Submission Error", 
+                f"An error occurred while submitting beacon data:\n\n{str(e)}\n\n"
+                f"Check the console for details."
+            )
     
     def parse_clipboard_loot(self, clipboard_text):
         """Parse loot data from clipboard text - handles multiple formats"""
@@ -2211,15 +2187,12 @@ class EVELogReader:
                 if not file_exists:
                     header = [
                         'Beacon ID',
-                        'Beacon Start',
-                        'Beacon End', 
-                        'Total Time',
-                        'Total CRAB Bounty (ISK)',
-                        'Rogue Drone Data Amount',
-                        'Rogue Drone Data Value (ISK)',
-                        'Total Loot Value (ISK)',
-                        'Loot Details',
-                        'Source File',
+                        'Total Duration (Text)',
+                        'Total CRAB Bounty (ISK) (Number)',
+                        'Rogue Drone Data Amount (Number)',
+                        'Loot Details (Long Text)',
+                        'App Version',
+                        'SDE Version',
                         'Export Date'
                     ]
                     writer.writerow(header)
@@ -2234,15 +2207,12 @@ class EVELogReader:
                 
                 row = [
                     session_data['beacon_id'],
-                    session_data['beacon_start'],
-                    session_data['beacon_end'],
-                    session_data['total_time'],
-                    session_data['total_crab_bounty'],
-                    session_data['rogue_drone_data_amount'],
-                    session_data['rogue_drone_data_value'],
-                    session_data['total_loot_value'],
-                    session_data['loot_details'],
-                    session_data['source_file'],
+                    session_data['total_duration_text'],
+                    session_data['total_crab_bounty_isk_number'],
+                    session_data['rogue_drone_data_amount_number'],
+                    session_data['loot_details_long_text'],
+                    session_data['app_version'],
+                    session_data['sde_version'],
                     export_time
                 ]
                 writer.writerow(row)
@@ -2292,29 +2262,62 @@ class EVELogReader:
         self.update_bounty_display()
         print("🔄 Bounty tracking reset")
     
-    def toggle_high_frequency(self):
-        """Toggle high-frequency monitoring functionality"""
-        if self.high_freq_var.get():
-            print("Starting high-frequency monitoring...")
-            self.start_monitoring_only()
-        else:
-            print("Stopping high-frequency monitoring...")
-            self.stop_monitoring_only = True
+    # toggle_high_frequency method removed - Watchdog handles automatic monitoring
     
     def start_monitoring_only(self):
-        """Start monitoring-only thread (without auto-refresh)"""
+        """Start Watchdog-based file monitoring"""
+        try:
+            # Stop existing monitoring first
+            if self.file_observer is not None:
+                self.stop_monitoring_only_method()
+            
+            # Check if eve_log_dir exists and is valid
+            if not self.eve_log_dir or not os.path.exists(self.eve_log_dir):
+                print(f"❌ Invalid log directory: {self.eve_log_dir}")
+                print("Falling back to polling monitoring...")
+                self.start_polling_monitoring()
+                return
+            
+            print(f"🔍 Starting Watchdog monitoring for: {self.eve_log_dir}")
+            
+            # Create file handler and observer
+            self.file_handler = EVELogFileHandler(self)
+            self.file_observer = Observer()
+            self.file_observer.schedule(self.file_handler, self.eve_log_dir, recursive=False)
+            
+            # Start monitoring
+            self.file_observer.start()
+            self.stop_monitoring_only = False
+            
+            # Verify observer is running
+            if self.file_observer.is_alive():
+                print(f"✅ Watchdog monitoring started successfully for: {self.eve_log_dir}")
+                print(f"🔍 Monitoring patterns: {self.file_handler.log_patterns}")
+            else:
+                print("❌ Watchdog observer failed to start")
+                self.start_polling_monitoring()
+            
+        except Exception as e:
+            print(f"❌ Error starting Watchdog monitoring: {e}")
+            print("Falling back to polling monitoring...")
+            # Fallback to old polling method
+            self.start_polling_monitoring()
+    
+    def start_polling_monitoring(self):
+        """Fallback polling-based monitoring (old method) - DEPRECATED"""
+        print("⚠️ Watchdog failed, falling back to polling monitoring")
         self.stop_monitoring_only = False
         self.monitoring_thread = threading.Thread(target=self.monitoring_only_loop, daemon=True)
         self.monitoring_thread.start()
-        print("Monitoring-only thread started")
+        print("Polling-based monitoring started (fallback)")
     
     def monitoring_only_loop(self):
-        """Monitoring-only loop - checks for changes and refreshes automatically"""
-        print("Monitoring loop started")
+        """Fallback monitoring loop - checks for changes and refreshes automatically"""
+        print("Polling monitoring loop started")
         while not self.stop_monitoring_only:
             time.sleep(1) # Check every 1 second for high-frequency monitoring
             if not self.stop_monitoring_only:
-                print("Checking for file changes (monitoring)...")
+                print("Checking for file changes (polling)...")
                 changed_files = self.check_for_changes()
                 if changed_files:
                     print(f"Changed files detected: {len(changed_files)} - refreshing automatically")
@@ -2325,9 +2328,29 @@ class EVELogReader:
                     if self.last_refresh_time:
                         self.root.after(0, self.update_status_with_check_time)
     
+    def stop_monitoring_only_method(self):
+        """Stop file monitoring (both Watchdog and polling)"""
+        self.stop_monitoring_only = True
+        
+        # Stop Watchdog observer
+        if self.file_observer is not None:
+            self.file_observer.stop()
+            self.file_observer.join()
+            self.file_observer = None
+            print("🔍 Watchdog monitoring stopped")
+        
+        # Stop polling thread
+        if self.monitoring_thread is not None and self.monitoring_thread.is_alive():
+            self.monitoring_thread.join(timeout=2)
+            print("Polling monitoring stopped")
+    
     def calculate_file_hash(self, file_path):
         """Calculate MD5 hash of file content for change detection"""
         try:
+            # Handle None or invalid input
+            if not file_path or not isinstance(file_path, (str, os.PathLike)):
+                return None
+                
             if not os.path.exists(file_path):
                 return None
             
@@ -2391,10 +2414,7 @@ class EVELogReader:
                 status_text = f"v{APP_VERSION} | Last refresh: {self.last_refresh_time.strftime('%H:%M:%S')} | Last check: {current_time.strftime('%H:%M:%S')}"
             
             # Add monitoring status
-            if self.high_freq_var.get():
-                status_text += " | High-freq: ON"
-            else:
-                status_text += " | High-freq: OFF"
+            status_text += " | Watchdog: ON"
             
             # Add CONCORD status
             if self.concord_countdown_active and not self.concord_link_completed:
@@ -2402,7 +2422,8 @@ class EVELogReader:
             elif self.concord_link_completed:
                 status_text += " | 🔗 CONCORD: Active"
             
-            self.status_var.set(status_text)
+            if hasattr(self, 'status_var'):
+                self.status_var.set(status_text)
     
     def show_file_times(self):
         """Show detailed file modification times for debugging"""
@@ -2549,7 +2570,7 @@ class EVELogReader:
             # Add footer
             text_widget.insert(tk.END, f"\nChecked at: {current_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
             text_widget.insert(tk.END, f"Total files: {len(file_info)}\n")
-            text_widget.insert(tk.END, f"Monitoring: {'High-frequency (1s)' if self.high_freq_var.get() else 'Normal (3s)'}\n")
+            text_widget.insert(tk.END, f"Monitoring: Watchdog (automatic)\n")
             
             # Make text read-only
             text_widget.config(state=tk.DISABLED)
@@ -2575,26 +2596,30 @@ class EVELogReader:
                 f.write(test_content)
             
             print(f"Created test log: {test_filename}")
-            self.status_var.set(f"Test log created: {test_filename}")
+            if hasattr(self, 'status_var'):
+                self.status_var.set(f"Test log created: {test_filename}")
             
             # Wait a moment then refresh to show the new file
             self.root.after(1000, self.refresh_recent_logs)
             
         except Exception as e:
             print(f"Error creating test log: {e}")
-            self.status_var.set(f"Error creating test log: {str(e)}")
+            if hasattr(self, 'status_var'):
+                self.status_var.set(f"Error creating test log: {str(e)}")
     
     def manual_refresh(self):
         """Manually trigger a refresh of the logs"""
         print("Manual refresh triggered")
         self.refresh_recent_logs()
         self.last_refresh_time = self.get_utc_now()
-        self.status_var.set(f"Last refresh: {self.last_refresh_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        if hasattr(self, 'status_var'):
+            self.status_var.set(f"Last refresh: {self.last_refresh_time.strftime('%Y-%m-%d %H:%M:%S')}")
     
     def clear_display(self):
         """Clear the display"""
-        self.text_widget.delete(1.0, tk.END)
-        self.text_widget.insert(tk.END, "Display cleared.")
+        if hasattr(self, 'text_widget'):
+            self.text_widget.delete(1.0, tk.END)
+            self.text_widget.insert(tk.END, "Display cleared.")
     
     def export_logs(self):
         """Export recent logs to a file"""
@@ -2609,7 +2634,7 @@ class EVELogReader:
             if file_path:
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(f"EVE Online Recent Logs - Exported on {self.get_utc_now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    f.write(f"Filter: Last {self.max_days_old} day(s), Max {self.max_files_to_show} files\n")
+                    f.write(f"Filter: Last {self.max_days_old} day(s), Max {self.max_files_to_show} files (Watchdog monitoring)\n")
                     f.write("=" * 80 + "\n\n")
                     
                     for timestamp, line, source_file in self.all_log_entries:
@@ -2620,12 +2645,14 @@ class EVELogReader:
                             export_line = f"[NO-TIME] [{source_file}] {line}"
                         f.write(export_line)
                 
-                self.status_var.set(f"Recent logs exported to {os.path.basename(file_path)}")
+                if hasattr(self, 'status_var'):
+                    self.status_var.set(f"Recent logs exported to {os.path.basename(file_path)}")
                 messagebox.showinfo("Export Complete", f"Recent logs exported successfully to:\n{file_path}")
                 
         except Exception as e:
             messagebox.showerror("Export Error", f"Error exporting logs: {str(e)}")
-            self.status_var.set(f"Export error: {str(e)}")
+            if hasattr(self, 'status_var'):
+                self.status_var.set(f"Export error: {str(e)}")
 
     def show_bounty_details(self):
         """Show detailed bounty information in a popup window"""
@@ -2775,12 +2802,14 @@ class EVELogReader:
                         f.write(f"    Running Total: {running_total:,} ISK\n")
                         f.write("-" * 40 + "\n")
                 
-                self.status_var.set(f"Bounty tracking exported to {os.path.basename(file_path)}")
+                if hasattr(self, 'status_var'):
+                    self.status_var.set(f"Bounty tracking exported to {os.path.basename(file_path)}")
                 messagebox.showinfo("Export Complete", f"Bounty tracking exported successfully to:\n{file_path}")
                 
         except Exception as e:
             messagebox.showerror("Export Error", f"Error exporting bounties: {str(e)}")
-            self.status_var.set(f"Export error: {str(e)}")
+            if hasattr(self, 'status_var'):
+                self.status_var.set(f"Export error: {str(e)}")
     
     # CRAB Bounty Tracking Functions
     def add_crab_bounty_entry(self, timestamp, isk_amount, source_file):
@@ -2802,25 +2831,7 @@ class EVELogReader:
         print(f"🦀 CRAB bounty tracked: {isk_amount:,} ISK (CRAB Total: {self.crab_total_bounty_isk:,} ISK)")
         self.update_crab_bounty_display()
     
-    def reset_crab_bounty_tracking(self):
-        """Reset CRAB bounty tracking to start fresh"""
-        if self.crab_bounty_entries:
-            # Ask for confirmation
-            result = messagebox.askyesno(
-                "Reset CRAB Bounty Tracking", 
-                f"Are you sure you want to reset CRAB bounty tracking?\n\n"
-                f"This will clear {len(self.crab_bounty_entries)} CRAB bounty entries "
-                f"and {self.crab_total_bounty_isk:,} ISK in tracked earnings.\n\n"
-                f"This action cannot be undone."
-            )
-            
-            if not result:
-                return
-        
-        self.crab_bounty_entries = []
-        self.crab_total_bounty_isk = 0
-        self.update_crab_bounty_display()
-        print("🔄 CRAB bounty tracking reset")
+    # reset_crab_bounty_tracking method removed - production ready
     
     def show_crab_bounty_details(self):
         """Show detailed CRAB bounty information in a popup window"""
@@ -2942,18 +2953,7 @@ class EVELogReader:
         except Exception as e:
             print(f"Error updating CRAB bounty display: {e}")
     
-    def add_test_crab_bounty(self):
-        """Test function to add a CRAB bounty for testing"""
-        if not self.crab_session_active:
-            messagebox.showwarning("CRAB Session Required", "CRAB session must be active to add bounties.\n\nStart a CONCORD link first.")
-            return
-        
-        # Create a test bounty entry
-        test_timestamp = self.get_utc_now()
-        test_isk = 50000  # 50k ISK test bounty
-        
-        self.add_crab_bounty_entry(test_timestamp, test_isk, "TEST_CRAB_BOUNTY")
-        print(f"🧪 Test CRAB bounty added: {test_isk:,} ISK")
+    # add_test_crab_bounty method removed - production ready
     
     def start_crab_session(self):
         """Start a CRAB bounty tracking session"""
@@ -2975,19 +2975,7 @@ class EVELogReader:
         self.update_crab_bounty_display()
         print("🦀 CRAB bounty tracking session ended")
     
-    def copy_beacon_id(self):
-        """Copy current Beacon ID to clipboard"""
-        if self.current_beacon_id:
-            try:
-                self.root.clipboard_clear()
-                self.root.clipboard_append(self.current_beacon_id)
-                print(f"📋 Beacon ID copied to clipboard: {self.current_beacon_id}")
-                messagebox.showinfo("Beacon ID Copied", f"Beacon ID copied to clipboard:\n{self.current_beacon_id}")
-            except Exception as e:
-                print(f"Error copying Beacon ID: {e}")
-                messagebox.showerror("Error", f"Failed to copy Beacon ID: {str(e)}")
-        else:
-            messagebox.showwarning("No Beacon ID", "No active Beacon ID to copy.")
+    # copy_beacon_id method removed - production ready
     
     def update_crab_session_status(self):
         """Update CRAB session status to match CONCORD status"""
@@ -3385,10 +3373,12 @@ class EVELogReader:
         """Update the Google Form status display in the UI"""
         try:
             status = self.get_google_form_status()
-            self.google_form_status_var.set(f"Form Status: {status}")
+            if hasattr(self, 'google_form_status_var'):
+                self.google_form_status_var.set(f"Form Status: {status}")
         except Exception as e:
             print(f"Error updating Google Form status display: {e}")
-            self.google_form_status_var.set("Form Status: Error")
+            if hasattr(self, 'google_form_status_var'):
+                self.google_form_status_var.set("Form Status: Error")
 
     def configure_google_form(self):
         """Configure Google Form URL and field mappings"""
@@ -3440,17 +3430,13 @@ The form will automatically submit beacon session data after each completion."""
             # Load existing configuration if available
             default_url = "https://docs.google.com/forms/d/e/YOUR_FORM_ID/formResponse"
             default_field_mappings = {
-                "Beacon ID": "entry.123456789",
-                "Beacon Start": "entry.234567890",
-                "Beacon End": "entry.345678901",
-                "Total Time": "entry.456789012",
-                "CRAB Bounty": "entry.567890123",
-                "Rogue Data Amount": "entry.678901234",
-                "Rogue Data Value": "entry.789012345",
-                "Total Loot Value": "entry.890123456",
-                "Loot Details": "entry.901234567",
-                "Source File": "entry.012345678",
-                "Export Date": "entry.123456789"
+                "Beacon ID": "entry.1520906809",
+                "Total Duration (Text)": "entry.66008066",
+                "Total CRAB Bounty (ISK) (Number)": "entry.257705337",
+                "Rogue Drone Data Amount (Number)": "entry.1906365497",
+                "Loot Details (Long Text)": "entry.1769084685",
+                "App Version": "entry.153523553",
+                "SDE Version": "entry.1747896195"
             }
             
             # Try to load existing configuration
@@ -3475,17 +3461,13 @@ The form will automatically submit beacon session data after each completion."""
             # Create field mapping entries
             field_mappings = {}
             fields = [
-                ("Beacon ID", default_field_mappings.get("Beacon ID", "entry.123456789")),
-                ("Beacon Start", default_field_mappings.get("Beacon Start", "entry.234567890")),
-                ("Beacon End", default_field_mappings.get("Beacon End", "entry.345678901")),
-                ("Total Time", default_field_mappings.get("Total Time", "entry.456789012")),
-                ("CRAB Bounty", default_field_mappings.get("CRAB Bounty", "entry.567890123")),
-                ("Rogue Data Amount", default_field_mappings.get("Rogue Data Amount", "entry.678901234")),
-                ("Rogue Data Value", default_field_mappings.get("Rogue Data Value", "entry.789012345")),
-                ("Total Loot Value", default_field_mappings.get("Total Loot Value", "entry.890123456")),
-                ("Loot Details", default_field_mappings.get("Loot Details", "entry.901234567")),
-                ("Source File", default_field_mappings.get("Source File", "entry.012345678")),
-                ("Export Date", default_field_mappings.get("Export Date", "entry.123456789"))
+                ("Beacon ID", default_field_mappings.get("Beacon ID", "entry.1520906809")),
+                ("Total Duration (Text)", default_field_mappings.get("Total Duration (Text)", "entry.66008066")),
+                ("Total CRAB Bounty (ISK) (Number)", default_field_mappings.get("Total CRAB Bounty (ISK) (Number)", "entry.257705337")),
+                ("Rogue Drone Data Amount (Number)", default_field_mappings.get("Rogue Drone Data Amount (Number)", "entry.1906365497")),
+                ("Loot Details (Long Text)", default_field_mappings.get("Loot Details (Long Text)", "entry.1769084685")),
+                ("App Version", default_field_mappings.get("App Version", "entry.153523553")),
+                ("SDE Version", default_field_mappings.get("SDE Version", "entry.1747896195"))
             ]
             
             for i, (field_name, default_entry) in enumerate(fields):
@@ -3551,16 +3533,12 @@ The form will automatically submit beacon session data after each completion."""
             # Create sample session data for testing
             sample_data = {
                 'beacon_id': 'TEST_BEACON_123',
-                'beacon_start': '2025-01-01 12:00:00',
-                'beacon_end': '2025-01-01 12:30:00',
-                'total_time': '0:30:00',
-                'total_crab_bounty': '1,000,000',
-                'rogue_drone_data_amount': '100',
-                'rogue_drone_data_value': '10,000,000',
-                'total_loot_value': '15,000,000',
-                'loot_details': 'Test loot data',
-                'source_file': 'test_file.txt',
-                'export_date': self.get_utc_now().strftime('%Y-%m-%d %H:%M:%S')
+                'total_duration_text': '0:30:00',
+                'total_crab_bounty_isk_number': 1000000,
+                'rogue_drone_data_amount_number': 100,
+                'loot_details_long_text': 'Test loot data',
+                'app_version': APP_VERSION,
+                'sde_version': getattr(self, 'sde_version', 'Unknown')
             }
             
             # Map to form fields
@@ -3653,24 +3631,111 @@ The form will automatically submit beacon session data after each completion."""
 
     def show_version_info(self):
         """Show version information in a popup window"""
-        version_info = f"""EVE Online Log Reader v{APP_VERSION}
-
-Features:
-• Real-time EVE log monitoring
+        # Create version info window
+        version_window = tk.Toplevel(self.root)
+        version_window.title("Version Information")
+        version_window.geometry("500x400")
+        version_window.configure(bg="#2b2b2b")
+        version_window.resizable(False, False)
+        
+        # Center the window
+        version_window.transient(self.root)
+        version_window.grab_set()
+        
+        # Main frame
+        main_frame = ttk.Frame(version_window, padding="20")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Title
+        title_label = ttk.Label(main_frame, text=f"EVE Online Log Reader v{APP_VERSION}", 
+                               font=("Segoe UI", 14, "bold"))
+        title_label.pack(pady=(0, 20))
+        
+        # Version details frame
+        version_frame = ttk.LabelFrame(main_frame, text="Version Information", padding="10")
+        version_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        # App version
+        app_version_label = ttk.Label(version_frame, text=f"App Version: {APP_VERSION}", 
+                                     font=("Segoe UI", 10))
+        app_version_label.pack(anchor=tk.W, pady=(0, 5))
+        
+        # SDE version with refresh button
+        sde_frame = ttk.Frame(version_frame)
+        sde_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        sde_version_text = getattr(self, 'sde_version', 'Unknown')
+        sde_version_label = ttk.Label(sde_frame, text=f"SDE Version: {sde_version_text}", 
+                                     font=("Segoe UI", 10))
+        sde_version_label.pack(side=tk.LEFT)
+        
+        refresh_btn = tk.Button(sde_frame, text="Refresh SDE", 
+                               command=lambda: self.refresh_sde_version(version_window),
+                               bg="#1e1e1e", fg="#ffffff",
+                               activebackground="#404040",
+                               activeforeground="#ffffff",
+                               relief="raised", borderwidth=1,
+                               font=("Segoe UI", 8))
+        refresh_btn.pack(side=tk.RIGHT, padx=(10, 0))
+        
+        # Features
+        features_frame = ttk.LabelFrame(main_frame, text="Features", padding="10")
+        features_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        features_text = """• Real-time EVE log monitoring
 • Bounty tracking and statistics
 • CONCORD Rogue Analysis Beacon tracking
 • CRAB bounty session management
 • Google Form integration
-• Dark theme UI
-• High-frequency monitoring
-• Content hash change detection
-
-Built with Python and Tkinter
-For EVE Online players and ISK hunters
-
-© 2025 - EVE Log Reader Project"""
+• Watchdog file monitoring
+• SDE version tracking
+• Dark theme UI"""
         
-        messagebox.showinfo("Version Information", version_info)
+        features_label = ttk.Label(features_frame, text=features_text, 
+                                  font=("Segoe UI", 9), justify=tk.LEFT)
+        features_label.pack(anchor=tk.W)
+        
+        # Copyright
+        copyright_label = ttk.Label(main_frame, text="© 2025 - EVE Log Reader Project", 
+                                   font=("Segoe UI", 8), foreground="#888888")
+        copyright_label.pack(pady=(20, 0))
+        
+        # Close button
+        close_btn = tk.Button(main_frame, text="Close", 
+                             command=version_window.destroy,
+                             bg="#1e1e1e", fg="#ffffff",
+                             activebackground="#404040",
+                             activeforeground="#ffffff",
+                             relief="raised", borderwidth=1,
+                             font=("Segoe UI", 9))
+        close_btn.pack(pady=(20, 0))
+    
+    def refresh_sde_version(self, version_window=None):
+        """Refresh SDE version and update UI"""
+        try:
+            print("🔄 Refreshing SDE version...")
+            old_version = getattr(self, 'sde_version', 'Unknown')
+            new_version = self.fetch_sde_version()
+            
+            if version_window and version_window.winfo_exists():
+                # Update the version window
+                for widget in version_window.winfo_children():
+                    if isinstance(widget, ttk.Frame):
+                        for child in widget.winfo_children():
+                            if isinstance(child, ttk.LabelFrame):
+                                for grandchild in child.winfo_children():
+                                    if isinstance(grandchild, ttk.Frame):
+                                        for great_grandchild in grandchild.winfo_children():
+                                            if isinstance(great_grandchild, ttk.Label) and "SDE Version:" in great_grandchild.cget("text"):
+                                                great_grandchild.config(text=f"SDE Version: {new_version}")
+                                                break
+            
+            print(f"✅ SDE version refreshed: {old_version} → {new_version}")
+            
+        except Exception as e:
+            print(f"❌ Error refreshing SDE version: {e}")
+            if version_window and version_window.winfo_exists():
+                messagebox.showerror("Refresh Error", f"Failed to refresh SDE version:\n\n{str(e)}")
 
     def update_beacon_session_if_newer(self, new_beacon_timestamp, new_source_file, new_message_type):
         """Update beacon session only if the new one is more recent than the current one"""
@@ -3776,10 +3841,25 @@ For EVE Online players and ISK hunters
             
         except Exception as e:
             print(f"❌ Error stopping current beacon session: {e}")
+    
+    def cleanup(self):
+        """Cleanup resources when application closes"""
+        try:
+            self.stop_monitoring_only_method()
+            print("🧹 Cleanup completed")
+        except Exception as e:
+            print(f"❌ Error during cleanup: {e}")
 
 def main():
     root = tk.Tk()
     app = EVELogReader(root)
+    
+    # Setup cleanup on window close
+    def on_closing():
+        app.cleanup()
+        root.destroy()
+    
+    root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()
 
 if __name__ == "__main__":

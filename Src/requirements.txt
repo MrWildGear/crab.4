@@ -5,6 +5,7 @@
 pyinstaller>=5.0.0
 requests
 psutil
+watchdog>=3.0.0
 
 # Optional: UPX compression for smaller executables
 # upx-ucl>=4.0.0
