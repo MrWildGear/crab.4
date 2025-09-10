@@ -16,7 +16,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 # Application version
-APP_VERSION = "0.7.1"
+APP_VERSION = "0.7.2"
 
 # OPTION 1 IMPLEMENTATION: Multi-Account Bounty Tracking Fix
 # This version disables restrictive log filtering to ensure ALL EVE account bounties are tracked
@@ -978,6 +978,11 @@ class EVELogReader:
     def scan_for_active_crab_beacons(self):
         """Scan existing log entries for active CRAB beacons and auto-start tracking if recent"""
         try:
+            # Skip scan if countdown is already active
+            if self.concord_countdown_active:
+                print("🔍 Skipping CRAB beacon scan - countdown already active")
+                return
+                
             print("🔍 Scanning existing log entries for active CRAB beacons...")
             
             current_time = self.get_utc_now()
@@ -1832,7 +1837,12 @@ class EVELogReader:
     def start_concord_countdown(self):
         """Start the 60-minute countdown timer for CONCORD link"""
         if self.concord_countdown_thread and self.concord_countdown_thread.is_alive():
+            print("🔗 CONCORD countdown already running - skipping start")
             return  # Already running
+        
+        if self.concord_countdown_active:
+            print("🔗 CONCORD countdown already active - skipping start")
+            return  # Already active
         
         self.stop_concord_countdown = False
         self.concord_countdown_thread = threading.Thread(target=self.concord_countdown_loop, daemon=True)
@@ -1844,6 +1854,8 @@ class EVELogReader:
         # Use the actual beacon start time, not current time
         start_time = self.concord_link_start if self.concord_link_start else self.get_utc_now()
         target_time = start_time + timedelta(minutes=59, seconds=30)  # 59:30 to account for user delay
+        
+        print(f"🔗 Starting countdown from {start_time.strftime('%H:%M:%S')} to {target_time.strftime('%H:%M:%S')}")
         
         while not self.stop_concord_countdown:
             current_time = self.get_utc_now()
@@ -3819,7 +3831,7 @@ The form will automatically submit beacon session data after each completion."""
             # Start CRAB bounty tracking session
             self.start_crab_session()
             
-            # Start countdown timer
+            # Start countdown timer (only if not already running)
             self.start_concord_countdown()
             
             # Update displays
