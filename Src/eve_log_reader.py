@@ -16,7 +16,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 # Application version
-APP_VERSION = "0.7.0"
+APP_VERSION = "0.7.1"
 
 # OPTION 1 IMPLEMENTATION: Multi-Account Bounty Tracking Fix
 # This version disables restrictive log filtering to ensure ALL EVE account bounties are tracked
@@ -1109,8 +1109,8 @@ class EVELogReader:
                         
                         # Set up completed beacon tracking
                         self.concord_link_start = beacon_timestamp
-                        self.concord_link_completed = True
-                        self.concord_status_var.set("Status: Active")
+                        self.concord_link_completed = False  # Will be set to True when countdown finishes
+                        self.concord_status_var.set("Status: Linking")
                         self.concord_countdown_active = True
                         
                         # Generate unique Beacon ID
@@ -1455,7 +1455,7 @@ class EVELogReader:
                                     print(f"💰 Processing bounty: {bounty_amount:,} ISK from {source_file}")
                                     self.add_bounty_entry(timestamp, bounty_amount, source_file)
                                     
-                                    # Also track in CRAB if session is active
+                                    # Track in CRAB only if session is active (during countdown or after completion)
                                     if self.crab_session_active:
                                         self.add_crab_bounty_entry(timestamp, bounty_amount, source_file)
                                 else:
@@ -1535,10 +1535,17 @@ class EVELogReader:
                 status_text += f" | 🦀 CRAB: {len(self.crab_bounty_entries)} ({self.crab_total_bounty_isk:,} ISK)"
             
             # Add CONCORD information to status
-            if self.concord_countdown_active and not self.concord_link_completed:
-                status_text += " | 🔗 CONCORD: Linking"
-            elif self.concord_link_completed:
-                status_text += " | 🔗 CONCORD: Active"
+            if self.concord_countdown_active:
+                if self.concord_link_completed:
+                    status_text += " | 🔗 CONCORD: Active"
+                else:
+                    status_text += " | 🔗 CONCORD: Linking"
+            elif self.concord_link_start:
+                # Countdown not active but beacon was started
+                if self.concord_countdown_var.get() == "Countdown: EXPIRED":
+                    status_text += " | 🔗 CONCORD: Expired"
+                else:
+                    status_text += " | 🔗 CONCORD: Completed"
             
             # Add Beacon ID to status if available
             if self.current_beacon_id:
@@ -1554,6 +1561,9 @@ class EVELogReader:
             
             # Update CONCORD display
             self.update_concord_display()
+            
+            # Update CRAB session status to match CONCORD status
+            self.update_crab_session_status()
             
             # Scan for any bounties that might have been missed
             self.scan_existing_bounties()
@@ -1831,35 +1841,32 @@ class EVELogReader:
     
     def concord_countdown_loop(self):
         """Countdown loop for CONCORD link process"""
-        start_time = self.get_utc_now()
-        target_time = start_time + timedelta(minutes=60)
+        # Use the actual beacon start time, not current time
+        start_time = self.concord_link_start if self.concord_link_start else self.get_utc_now()
+        target_time = start_time + timedelta(minutes=59, seconds=30)  # 59:30 to account for user delay
         
         while not self.stop_concord_countdown:
             current_time = self.get_utc_now()
+            remaining = target_time - current_time
             
+            if remaining.total_seconds() <= 0:
+                # Time's up! Mark as expired
+                self.concord_countdown_var.set("Countdown: EXPIRED")
+                self.concord_countdown_label.configure(foreground="#ff0000")  # Red for expired
+                self.concord_countdown_active = False
+                print("⚠️ CONCORD beacon countdown expired!")
+                break
+            
+            # Update countdown display
+            minutes = int(remaining.total_seconds() // 60)
+            seconds = int(remaining.total_seconds() % 60)
+            countdown_text = f"Countdown: {minutes:02d}:{seconds:02d}"
+            
+            # Color based on state: Yellow for linking, Green for active
             if self.concord_link_completed:
-                # Link completed - show countdown format but in green
-                remaining = target_time - current_time
-                minutes = int(remaining.total_seconds() // 60)
-                seconds = int(remaining.total_seconds() % 60)
-                countdown_text = f"Countdown: {minutes:02d}:{seconds:02d}"
-                color = "#00ff00"  # Green for completed
+                color = "#00ff00"  # Green for active
             else:
-                # Link still active - show countdown
-                remaining = target_time - current_time
-                
-                if remaining.total_seconds() <= 0:
-                    # Time's up!
-                    self.root.after(0, self.concord_countdown_expired)
-                    break
-                
-                # Update countdown display
-                minutes = int(remaining.total_seconds() // 60)
-                seconds = int(remaining.total_seconds() % 60)
-                countdown_text = f"Countdown: {minutes:02d}:{seconds:02d}"
-                
-                # Always yellow while linking (until completion)
-                color = "#ffff00"  # Yellow while linking
+                color = "#ffff00"  # Yellow for linking
             
             self.root.after(0, lambda: self.update_concord_countdown(countdown_text, color))
             
@@ -1882,11 +1889,17 @@ class EVELogReader:
     def update_concord_display(self):
         """Update the CONCORD display with current status"""
         if self.concord_link_start:
-            if self.concord_link_completed:
-                self.concord_status_var.set("Status: Active")
-                # Don't change countdown text here - let the countdown loop handle it
+            if self.concord_countdown_active:
+                if self.concord_link_completed:
+                    self.concord_status_var.set("Status: Active")
+                else:
+                    self.concord_status_var.set("Status: Linking")
             else:
-                self.concord_status_var.set("Status: Linking")
+                # Countdown not active - check if it expired or was stopped
+                if self.concord_countdown_var.get() == "Countdown: EXPIRED":
+                    self.concord_status_var.set("Status: Expired")
+                else:
+                    self.concord_status_var.set("Status: Inactive")
         else:
             self.concord_status_var.set("Status: Inactive")
             self.concord_countdown_var.set("Countdown: --:--")
@@ -2980,25 +2993,31 @@ class EVELogReader:
     def update_crab_session_status(self):
         """Update CRAB session status to match CONCORD status"""
         if self.concord_link_start:
-            if self.concord_link_completed:
-                # Check if this was manually ended with a specific status
+            if self.concord_countdown_active:
+                if self.concord_link_completed:
+                    # CONCORD is Active (countdown still running), so CRAB should also be Active
+                    self.crab_session_active = True
+                    self.crab_session_var.set("CRAB Session: Active")
+                else:
+                    # CONCORD is Linking (countdown active), so CRAB should also be Linking
+                    self.crab_session_active = True
+                    self.crab_session_var.set("CRAB Session: Linking")
+            else:
+                # Countdown not active - check if it expired or was stopped
                 current_status = self.concord_status_var.get()
-                if "Failed" in current_status:
-                    # Keep the Failed status
+                if "Expired" in current_status:
+                    self.crab_session_active = False
+                    self.crab_session_var.set("CRAB Session: Expired")
+                elif "Failed" in current_status:
                     self.crab_session_active = False
                     self.crab_session_var.set("CRAB Session: Failed")
                 elif "Completed" in current_status:
-                    # Keep the Completed status  
                     self.crab_session_active = False
                     self.crab_session_var.set("CRAB Session: Completed")
                 else:
-                    # CONCORD is Active, so CRAB should also be Active
-                    self.crab_session_active = True
-                    self.crab_session_var.set("CRAB Session: Active")
-            else:
-                # CONCORD is Linking, so CRAB should also be Linking
-                self.crab_session_active = True
-                self.crab_session_var.set("CRAB Session: Linking")
+                    # CONCORD is inactive, CRAB should be inactive
+                    self.crab_session_active = False
+                    self.crab_session_var.set("CRAB Session: Inactive")
         else:
             # No CONCORD link, CRAB is inactive
             self.crab_session_active = False
