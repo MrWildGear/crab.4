@@ -16,7 +16,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 # Application version
-APP_VERSION = "0.7.2"
+APP_VERSION = "0.7.3"
 
 # OPTION 1 IMPLEMENTATION: Multi-Account Bounty Tracking Fix
 # This version disables restrictive log filtering to ensure ALL EVE account bounties are tracked
@@ -1114,8 +1114,8 @@ class EVELogReader:
                         
                         # Set up completed beacon tracking
                         self.concord_link_start = beacon_timestamp
-                        self.concord_link_completed = False  # Will be set to True when countdown finishes
-                        self.concord_status_var.set("Status: Linking")
+                        self.concord_link_completed = True  # Link is already completed
+                        self.concord_status_var.set("Status: Active")
                         self.concord_countdown_active = True
                         
                         # Generate unique Beacon ID
@@ -1289,8 +1289,9 @@ class EVELogReader:
                             self.current_beacon_id = self.generate_beacon_id(source_file, timestamp)
                             self.beacon_source_file = source_file
                             
-                            # Start CRAB bounty tracking session
-                            self.start_crab_session()
+                            # Don't start CRAB session for expired beacons
+                            self.crab_session_active = False
+                            self.crab_session_var.set("CRAB Session: Expired")
                             
                             # Update displays
                             self.update_concord_display()
@@ -1911,7 +1912,13 @@ class EVELogReader:
                 if self.concord_countdown_var.get() == "Countdown: EXPIRED":
                     self.concord_status_var.set("Status: Expired")
                 else:
-                    self.concord_status_var.set("Status: Inactive")
+                    # Countdown stopped but beacon was active - check if it should be completed
+                    if self.concord_link_completed:
+                        self.concord_status_var.set("Status: Completed")
+                        self.concord_countdown_var.set("Countdown: --:--")
+                    else:
+                        self.concord_status_var.set("Status: Inactive")
+                        self.concord_countdown_var.set("Countdown: --:--")
         else:
             self.concord_status_var.set("Status: Inactive")
             self.concord_countdown_var.set("Countdown: --:--")
